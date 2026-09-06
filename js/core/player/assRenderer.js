@@ -62,6 +62,67 @@ export function createAssRenderer({
 
   let instance = null;
   let destroyed = false;
+  let restoreVideoFrameCallback = null;
+
+  /**
+   * ass.js drives its render loop with requestVideoFrameCallback whenever the video
+   * element exposes it, falling back to requestAnimationFrame otherwise. webOS
+   * exposes the API but never invokes it: the video is composited on a hardware
+   * plane, so no frame is ever presented to the page. The loop then waits on a
+   * callback that never arrives and subtitles stay on whatever cue was painted when
+   * the instance was built.
+   *
+   * Route it through requestAnimationFrame for this instance instead - measured at
+   * a steady 60fps on the same page - and restore the original on destroy.
+   */
+  function useAnimationFrameForRendering() {
+    if (typeof video.requestVideoFrameCallback !== "function") {
+      return;
+    }
+    const original = video.requestVideoFrameCallback;
+    const originalCancel = video.cancelVideoFrameCallback;
+    const descriptor = Object.getOwnPropertyDescriptor(video, "requestVideoFrameCallback");
+    const cancelDescriptor = Object.getOwnPropertyDescriptor(video, "cancelVideoFrameCallback");
+    try {
+      Object.defineProperty(video, "requestVideoFrameCallback", {
+        configurable: true,
+        writable: true,
+        // ass.js reads metadata?.mediaTime and falls back to video.currentTime,
+        // so omitting the metadata argument is enough.
+        value: (callback) => requestAnimationFrame((now) => callback(now))
+      });
+      Object.defineProperty(video, "cancelVideoFrameCallback", {
+        configurable: true,
+        writable: true,
+        value: (handle) => cancelAnimationFrame(handle)
+      });
+    } catch (_) {
+      return;
+    }
+    restoreVideoFrameCallback = () => {
+      try {
+        if (descriptor) {
+          Object.defineProperty(video, "requestVideoFrameCallback", descriptor);
+        } else {
+          delete video.requestVideoFrameCallback;
+          if (typeof original === "function") {
+            video.requestVideoFrameCallback = original;
+          }
+        }
+        if (cancelDescriptor) {
+          Object.defineProperty(video, "cancelVideoFrameCallback", cancelDescriptor);
+        } else {
+          delete video.cancelVideoFrameCallback;
+          if (typeof originalCancel === "function") {
+            video.cancelVideoFrameCallback = originalCancel;
+          }
+        }
+      } catch (_) {
+        // Best effort.
+      }
+      restoreVideoFrameCallback = null;
+    };
+  }
 
   return {
     get active() {
@@ -124,6 +185,7 @@ export function createAssRenderer({
             detail: "ASS body lacks an [Events] section with Dialogue rows"
           };
         }
+        useAnimationFrameForRendering();
         instance = new AssConstructor(sourceBody, video, { container, resampling });
         debugAssRender("constructed", {
           token,
@@ -218,6 +280,7 @@ export function createAssRenderer({
         return;
       }
       destroyed = true;
+      restoreVideoFrameCallback?.();
       if (instance) {
         try {
           instance.destroy();
