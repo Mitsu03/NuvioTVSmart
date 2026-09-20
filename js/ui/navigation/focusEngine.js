@@ -1,6 +1,13 @@
 import { Router } from "./router.js";
 import { Platform } from "../../platform/index.js";
 
+// Pointer input covers both the LG Magic Remote and an ordinary mouse or touch
+// screen in a browser. The handlers below are input-agnostic, so gate them on
+// the capability rather than on webOS alone.
+function supportsPointerInput() {
+  return Platform.isWebOS() || Platform.isBrowser();
+}
+
 function buildNormalizedEvent(event) {
   const normalizedKey = Platform.normalizeKey(event);
   const normalizedCode = Number(normalizedKey.keyCode || 0);
@@ -64,12 +71,16 @@ export const FocusEngine = {
       document.addEventListener("tizenhwkey", this.boundHandleTizenHardwareKey, true);
       window.addEventListener("tizenhwkey", this.boundHandleTizenHardwareKey, true);
     }
-    if (Platform.isWebOS()) {
+    if (supportsPointerInput()) {
       document.addEventListener("mousemove", this.boundHandlePointerMove, true);
       document.addEventListener("pointermove", this.boundHandlePointerMove, true);
       document.addEventListener("click", this.boundHandlePointerClick, true);
-      document.documentElement?.classList?.add("webos-pointer-remote");
-      document.body?.classList?.add("webos-pointer-remote");
+      document.documentElement?.classList?.add("pointer-input");
+      document.body?.classList?.add("pointer-input");
+      if (Platform.isWebOS()) {
+        document.documentElement?.classList?.add("webos-pointer-remote");
+        document.body?.classList?.add("webos-pointer-remote");
+      }
     }
   },
 
@@ -288,7 +299,7 @@ export const FocusEngine = {
   },
 
   handlePointerMove(event) {
-    if (!Platform.isWebOS()) {
+    if (!supportsPointerInput()) {
       return;
     }
     this.pendingPointerMoveEvent = event;
@@ -309,7 +320,7 @@ export const FocusEngine = {
   },
 
   processPointerMove(event) {
-    if (!Platform.isWebOS()) {
+    if (!supportsPointerInput()) {
       return;
     }
     const currentScreen = Router.getCurrentScreen();
@@ -325,7 +336,7 @@ export const FocusEngine = {
   },
 
   handlePointerClick(event) {
-    if (!Platform.isWebOS()) {
+    if (!supportsPointerInput()) {
       return;
     }
     const target = this.getPointerFocusable(event);

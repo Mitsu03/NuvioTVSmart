@@ -21891,7 +21891,8 @@ html[data-card-depth="true"][data-card-depth-trailers="true"] .detail-trailer-ca
   transition: opacity 180ms cubic-bezier(0.2, 0, 0, 1) !important;
 }
 
-.webos-pointer-remote .focusable {
+.webos-pointer-remote .focusable,
+.pointer-input .focusable {
   cursor: pointer;
 }
 
