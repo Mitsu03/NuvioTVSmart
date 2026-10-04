@@ -10,6 +10,7 @@ import autoprefixer from "autoprefixer";
 import { readAppMetadata, syncVersionFiles } from "./appMetadata.mjs";
 import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 import { writeRuntimeEnvScriptFile } from "./envProperties.mjs";
+import { buildI18nBundles } from "./buildI18nBundles.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -244,13 +245,35 @@ function insertInsetFallbacks(decl) {
 }
 
 function legacyDeclarationFallbackPlugin() {
+  const guardedDeclarations = new WeakSet();
+  const lastGuardByRule = new WeakMap();
   return {
     postcssPlugin: "nuvio-legacy-declaration-fallbacks",
     Declaration(decl) {
+      if (guardedDeclarations.has(decl)) return;
       insertInsetFallbacks(decl);
 
       const legacyValue = toLegacyColorValue(toLegacyLengthValue(decl.value));
       if (legacyValue && legacyValue !== decl.value) {
+        // Custom properties accept unsupported math as tokens. A later var()
+        // substitution then invalidates the consuming property, so duplicate
+        // declarations alone cannot provide a legacy fallback.
+        if (decl.prop.startsWith("--") && /\b(min|max|clamp)\(/.test(decl.value)) {
+          const modernDecl = decl.clone();
+          guardedDeclarations.add(modernDecl);
+          const modernRule = decl.parent.clone({ nodes: [modernDecl] });
+          const guard = postcss.atRule({
+            name: "supports",
+            params:
+              "(width: min(1px, 2px)) and (width: max(1px, 2px)) and (width: clamp(1px, 2px, 3px))"
+          });
+          guard.append(modernRule);
+          const previousGuard = lastGuardByRule.get(decl.parent);
+          (previousGuard || decl.parent).after(guard);
+          lastGuardByRule.set(decl.parent, guard);
+          decl.value = legacyValue;
+          return;
+        }
         const previous = decl.prev();
         if (
           !previous ||
@@ -383,32 +406,83 @@ function flexGapFallbackPlugin() {
 
 flexGapFallbackPlugin.postcss = true;
 
+const BUNDLED_CSS_FILE = "bundle.css";
+
 async function buildCSS() {
   console.log("processing CSS with PostCSS (legacy support)...");
   const cssDir = path.join(rootDir, "css");
+  const distCssDir = path.join(distDir, "css");
+  const outPath = path.join(distCssDir, BUNDLED_CSS_FILE);
   const files = await readdir(cssDir);
-  const cssFiles = files.filter((f) => f.endsWith(".css"));
 
-  for (const file of cssFiles) {
-    const cssPath = path.join(cssDir, file);
-    const outPath = path.join(distDir, "css", file);
+  const componentFiles = files
+    .filter((file) => /^components-\d+\.css$/.test(file))
+    .sort((a, b) => {
+      const numA = Number(a.match(/^components-(\d+)\.css$/)[1]);
+      const numB = Number(b.match(/^components-(\d+)\.css$/)[1]);
+      return numA - numB;
+    });
 
-    const css = await readFile(cssPath, "utf8");
-    const result = await postcss([
-      postcssGlobalData({ files: [path.join(cssDir, "base.css")] }),
-      autoprefixer({
-        overrideBrowserslist: [`Chrome ${compatibilityPolicy.chromiumVersion}`],
-        grid: "autoplace"
-      }),
-      legacyDeclarationFallbackPlugin(),
-      unsupportedSelectorFallbackPlugin(),
-      flexGapFallbackPlugin(),
-      cssnano()
-    ]).process(css, { from: cssPath, to: outPath });
+  // Preserve cascade order: tokens/base first, layout, components, then
+  // any future stylesheets, with themes last so overrides win.
+  const orderedFiles = ["base.css", "layout.css", ...componentFiles];
+  const orderedSet = new Set([...orderedFiles, "components.css", BUNDLED_CSS_FILE]);
+  const extraFiles = files
+    .filter((file) => file.endsWith(".css") && !orderedSet.has(file) && file !== "themes.css")
+    .sort();
+  const finalOrder = [...orderedFiles, ...extraFiles, "themes.css"].filter((file) =>
+    files.includes(file)
+  );
 
-    await mkdir(path.dirname(outPath), { recursive: true });
-    await writeFile(outPath, result.css);
+  const remoteImports = [];
+  const seenRemoteImports = new Set();
+  const bodies = [];
+
+  const remoteImportPattern =
+    /@import\s+(?:url\(\s*["']?(https?:\/\/[^"')]+)["']?\s*\)|["'](https?:\/\/[^"']+)["'])\s*[^;]*;/gi;
+  const localImportPattern =
+    /@import\s+(?:url\(\s*["']?(\.{0,2}\/[^"')]+)["']?\s*\)|["'](\.{0,2}\/[^"']+)["'])\s*[^;]*;/gi;
+
+  for (const file of finalOrder) {
+    const raw = await readFile(path.join(cssDir, file), "utf8");
+
+    for (const match of raw.matchAll(remoteImportPattern)) {
+      const url = match[1] || match[2];
+      if (url && !seenRemoteImports.has(url)) {
+        seenRemoteImports.add(url);
+        remoteImports.push(`@import url("${url}");`);
+      }
+    }
+
+    // Strip all @imports: remote ones are hoisted above, local ones are
+    // inlined by this concatenation (e.g. components.css manifest).
+    const body = raw.replace(remoteImportPattern, "").replace(localImportPattern, "").trim();
+    if (body) {
+      const result = await postcss([
+        postcssGlobalData({ files: [path.join(cssDir, "base.css")] }),
+        autoprefixer({
+          overrideBrowserslist: [`Chrome ${compatibilityPolicy.chromiumVersion}`],
+          grid: "autoplace"
+        }),
+        legacyDeclarationFallbackPlugin(),
+        unsupportedSelectorFallbackPlugin(),
+        flexGapFallbackPlugin(),
+        cssnano()
+      ]).process(`/* ${file} */\n${body}`, {
+        from: path.join(cssDir, file),
+        to: outPath
+      });
+
+      bodies.push(result.css);
+    }
   }
+
+  const concatenated = [...remoteImports, ...bodies].filter(Boolean).join("\n\n");
+
+  // Only the single bundled file is part of the build output.
+  await rm(distCssDir, { recursive: true, force: true });
+  await mkdir(distCssDir, { recursive: true });
+  await writeFile(outPath, concatenated);
 }
 
 async function copyOptionalRootFile(fileName, { fallback = null, defaultContents = "" } = {}) {
@@ -475,6 +549,47 @@ async function buildAssSubtitleLibrary() {
   });
 }
 
+async function buildPluginRuntimeAssets() {
+  console.log("building isolated JavaScript plugin runtime...");
+  await mkdir(path.join(distDir, "assets", "libs"), { recursive: true });
+  await mkdir(path.join(distDir, "assets", "runtime"), { recursive: true });
+  const cryptoJsSource = await readFile(
+    path.join(rootDir, "node_modules", "crypto-js", "crypto-js.js"),
+    "utf8"
+  );
+  await build({
+    entryPoints: [
+      path.join(rootDir, "node_modules", "quickjs-emscripten", "dist", "index.global.js")
+    ],
+    outfile: path.join(distDir, "assets", "libs", "quickjs-emscripten.global.js"),
+    bundle: false,
+    target: [`chrome${compatibilityPolicy.chromiumVersion}`],
+    minify: !debugBundle,
+    legalComments: "none"
+  });
+  await build({
+    entryPoints: [path.join(rootDir, "js", "core", "player", "pluginWorker.js")],
+    outfile: path.join(distDir, "assets", "runtime", "plugin-worker.js"),
+    bundle: true,
+    platform: "browser",
+    format: "iife",
+    target: [`chrome${compatibilityPolicy.chromiumVersion}`],
+    minify: !debugBundle,
+    legalComments: "none",
+    define: {
+      __NUVIO_CRYPTO_JS_SOURCE__: JSON.stringify(cryptoJsSource)
+    }
+  });
+  await cp(
+    path.join(rootDir, "node_modules", "quickjs-emscripten", "LICENSE"),
+    path.join(distDir, "assets", "libs", "quickjs-emscripten.LICENSE")
+  );
+  await cp(
+    path.join(rootDir, "node_modules", "crypto-js", "LICENSE"),
+    path.join(distDir, "assets", "libs", "crypto-js.LICENSE")
+  );
+}
+
 async function buildBundle() {
   const { version } = await readAppMetadata();
 
@@ -518,6 +633,7 @@ async function runBuild() {
       cp(path.join(rootDir, "boot-guard.js"), path.join(distDir, "boot-guard.js")),
       cp(path.join(rootDir, "docs", "youtube-proxy.html"), path.join(distDir, "youtube-proxy.html"))
     ]);
+    await buildI18nBundles({ rootDir, distDir });
     await buildCoreJsBundle();
     await Promise.all([
       cp(
@@ -529,7 +645,7 @@ async function runBuild() {
         path.join(distDir, "assets", "libs", "hls.js.LICENSE")
       ),
       cp(
-        path.join(rootDir, "node_modules", "dashjs", "dist", "dash.all.min.js"),
+        path.join(rootDir, "node_modules", "dashjs", "dist", "legacy", "umd", "dash.all.min.js"),
         path.join(distDir, "assets", "libs", "dash.all.min.js")
       ),
       cp(
@@ -542,6 +658,7 @@ async function runBuild() {
       )
     ]);
     await buildAssSubtitleLibrary();
+    await buildPluginRuntimeAssets();
     await cp(
       path.join(rootDir, "node_modules", "libbitsub", "pkg", "libbitsub_bg.wasm"),
       path.join(distDir, "assets", "libs", "libbitsub_bg.wasm")
@@ -559,7 +676,21 @@ async function runBuild() {
     await buildBundle();
 
     const sourceIndex = await readFile(path.join(rootDir, "index.html"), "utf8");
-    await writeFile(path.join(distDir, "index.html"), sourceIndex);
+    // The build ships a single concatenated stylesheet. Rewrite any legacy
+    // per-file css/<name>.css references to the bundled output so dist
+    // always points at the one file, even if the source still lists several.
+    let injectedBundledCss = false;
+    const bundledIndex = sourceIndex.replace(
+      /[ \t]*<link\s+rel="stylesheet"\s+href="css\/[^"]*"(?:\s*\/?)>[ \t]*\r?\n?/gi,
+      () => {
+        if (!injectedBundledCss) {
+          injectedBundledCss = true;
+          return `    <link rel="stylesheet" href="css/${BUNDLED_CSS_FILE}" />\n`;
+        }
+        return "";
+      }
+    );
+    await writeFile(path.join(distDir, "index.html"), bundledIndex);
 
     console.log("configuring runtime env from local.properties...");
     const envResult = await writeRuntimeEnvScriptFile(path.join(distDir, "nuvio.env.js"), {

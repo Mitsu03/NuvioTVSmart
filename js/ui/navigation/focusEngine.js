@@ -1,4 +1,4 @@
-import { Router } from "./router.js";
+import { Router } from "./routerState.js";
 import { Platform } from "../../platform/index.js";
 
 function buildNormalizedEvent(event) {
@@ -55,15 +55,10 @@ export const FocusEngine = {
   init() {
     this.boundHandleKey = this.handleKey.bind(this);
     this.boundHandleKeyUp = this.handleKeyUp.bind(this);
-    this.boundHandleTizenHardwareKey = this.handleTizenHardwareKey.bind(this);
     this.boundHandlePointerMove = this.handlePointerMove.bind(this);
     this.boundHandlePointerClick = this.handlePointerClick.bind(this);
     document.addEventListener("keydown", this.boundHandleKey, true);
     document.addEventListener("keyup", this.boundHandleKeyUp, true);
-    if (Platform.isTizen()) {
-      document.addEventListener("tizenhwkey", this.boundHandleTizenHardwareKey, true);
-      window.addEventListener("tizenhwkey", this.boundHandleTizenHardwareKey, true);
-    }
     if (Platform.isWebOS()) {
       document.addEventListener("mousemove", this.boundHandlePointerMove, true);
       document.addEventListener("pointermove", this.boundHandlePointerMove, true);
@@ -71,24 +66,6 @@ export const FocusEngine = {
       document.documentElement?.classList?.add("webos-pointer-remote");
       document.body?.classList?.add("webos-pointer-remote");
     }
-  },
-
-  handleTizenHardwareKey(event) {
-    const normalizedEvent = buildNormalizedEvent(event);
-    if (
-      !Platform.isBackEvent({
-        target: normalizedEvent.target,
-        key: normalizedEvent.key,
-        code: normalizedEvent.code,
-        keyName: normalizedEvent.keyName,
-        keyCode: normalizedEvent.keyCode,
-        originalKeyCode: normalizedEvent.originalKeyCode,
-        detail: event?.detail || null
-      })
-    ) {
-      return;
-    }
-    this.handleBack(event, normalizedEvent);
   },
 
   handleBack(event, normalizedEvent = buildNormalizedEvent(event)) {
@@ -117,6 +94,11 @@ export const FocusEngine = {
       if (consumeResult === "history") {
         return;
       }
+      Router.suppressNextPopstate?.();
+      return;
+    }
+
+    if (hasActiveModal()) {
       Router.suppressNextPopstate?.();
       return;
     }
@@ -154,7 +136,11 @@ export const FocusEngine = {
       // debounce, while the first Player -> Sources transition is still
       // mounting. Treat one keydown/keyup cycle as one Android-style Back
       // action; a later press is released first and therefore remains valid.
-      const backKeyIdentity = keyIdentity || "back";
+      // Samsung exposes the mandatory TV Back key through a few equivalent
+      // DOM representations (10009, 461, Back, XF86Back). They are one
+      // Android-style action, not separate keys. Canonicalize them before the
+      // key-cycle latch so an alias change cannot navigate a second route.
+      const backKeyIdentity = "back";
       if (this.activeBackKeyIdentities.has(backKeyIdentity)) {
         normalizedEvent.preventDefault();
         normalizedEvent.stopPropagation();
@@ -189,7 +175,7 @@ export const FocusEngine = {
         originalKeyCode: normalizedEvent.originalKeyCode
       })
     ) {
-      this.activeBackKeyIdentities.delete(keyIdentity || "back");
+      this.activeBackKeyIdentities.delete("back");
     }
     if (event?.target && !document.contains(event.target)) return;
     if (hasActiveModal()) {
@@ -215,6 +201,9 @@ export const FocusEngine = {
   },
 
   getKeyIdentity(event) {
+    if (Platform.isBackEvent(event)) {
+      return "back";
+    }
     const keyCode = Number(event?.keyCode || event?.which || 0);
     if (keyCode) {
       return `code:${keyCode}`;
@@ -224,7 +213,11 @@ export const FocusEngine = {
   },
 
   getPointerFocusable(event) {
-    const target = event?.target?.closest?.(".focusable");
+    const target =
+      event?.target?.closest?.(".focusable") ||
+      event?.target?.closest?.(
+        "button, [role='button'], a[href], input, textarea, select, [data-action], [data-action-id]"
+      );
     if (!target || !(target instanceof HTMLElement) || !document.contains(target)) {
       return null;
     }
@@ -260,7 +253,7 @@ export const FocusEngine = {
     }
 
     const focusRoot = screenContainer || document;
-    focusRoot.querySelectorAll?.(".focusable.focused")?.forEach((node) => {
+    focusRoot.querySelectorAll?.(".focused")?.forEach((node) => {
       if (node !== target) {
         node.classList.remove("focused");
       }
@@ -315,26 +308,44 @@ export const FocusEngine = {
     this.focusPointerTarget(target, event);
   },
 
-  async handlePointerClick(event) {
+  handlePointerClick(event) {
     if (!Platform.isWebOS()) {
       return;
     }
     const target = this.getPointerFocusable(event);
+    const currentScreen = Router.getCurrentScreen();
     if (!target) {
+      const handled = currentScreen?.onPointerSurfaceActivate?.(event?.target, event);
+      if (handled && typeof handled.then === "function") {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+        handled.catch((error) => console.warn("Screen pointer surface handler failed", error));
+      } else if (handled) {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+      }
       return;
     }
     if (hasActiveModal() && !target.closest?.(".nuvio-dialog-backdrop")) {
       return;
     }
     this.focusPointerTarget(target, event);
-    const currentScreen = Router.getCurrentScreen();
     if (hasActiveModal()) {
       return;
     }
     if (typeof currentScreen?.onPointerActivate !== "function") {
       return;
     }
-    const handled = await currentScreen.onPointerActivate(target, event);
+    const handled = currentScreen.onPointerActivate(target, event);
+    if (handled && typeof handled.then === "function") {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      event?.stopImmediatePropagation?.();
+      handled.catch((error) => console.warn("Screen pointer activation failed", error));
+      return;
+    }
     if (handled) {
       event?.preventDefault?.();
       event?.stopPropagation?.();

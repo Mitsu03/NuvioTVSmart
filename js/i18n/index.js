@@ -1,12 +1,15 @@
 import { ThemeStore } from "../data/local/themeStore.js";
+import { decodeAndroidStringEscapes } from "./androidStringEscapes.js";
 
 const DEFAULT_LOCALE = "en";
 const RTL_LOCALES = new Set(["ar", "he"]);
 const SUPPORTED_LOCALES = [
   "en",
   "ar",
+  "bg",
   "bs",
   "cs",
+  "da",
   "de",
   "el",
   "es",
@@ -28,12 +31,15 @@ const SUPPORTED_LOCALES = [
   "ru",
   "sk",
   "sl",
+  "sr-latn",
   "sq",
   "sv",
   "ta",
   "tr",
+  "uk",
   "vi",
-  "zh-cn"
+  "zh-cn",
+  "zh-tw"
 ];
 
 const KEY_ALIASES = {
@@ -369,18 +375,37 @@ const KEY_ALIASES = {
   "auth.qr.cardSubtitleSignedOut": "auth_qr_scan_instruction",
   "auth.qr.cardTitle": "auth_qr_account_login",
   "auth.qr.codeLabel": "auth_qr_code_label",
+  "auth.qr.connected": "auth_qr_connected",
   "auth.qr.continue": "auth_qr_continue",
   "auth.qr.continueWithoutAccount": "auth_qr_continue_without_account",
+  "auth.qr.configureServer": "auth_qr_configure_server",
   "auth.qr.expired": "qr_login_expired",
   "auth.qr.leftDescriptionSignedIn": "auth_qr_connected",
   "auth.qr.leftDescriptionSignedOut": "auth_qr_phone_hint",
+  "auth.qr.manualInstruction": "auth_qr_manual_instruction",
+  "auth.qr.notConfigured": "auth_qr_not_configured",
   "auth.qr.preparing": "auth_qr_generating",
   "auth.qr.refresh": "auth_qr_refresh",
   "auth.qr.scanPrompt": "auth_qr_scan_instruction",
   "auth.qr.waitingApproval": "qr_login_pending",
   "auth.qr.scanAndSignIn": "auth_qr_scan_instruction",
+  "auth.qr.scanInstruction": "auth_qr_scan_instruction",
+  "auth.qr.success": "qr_login_success",
+  "auth.qr.syncedData": "auth_qr_synced_data",
   "auth.qr.title": "auth_qr_title",
   "auth.qr.unavailable": "auth_qr_unavailable",
+  "auth.email.emailLabel": "auth_email_email_label",
+  "auth.email.hint": "auth_email_hint",
+  "auth.email.instruction": "auth_email_instruction",
+  "auth.email.invalidCredentials": "auth_email_invalid_credentials",
+  "auth.email.networkError": "auth_email_network_error",
+  "auth.email.passwordLabel": "auth_email_password_label",
+  "auth.email.passwordPlaceholder": "auth_password_placeholder",
+  "auth.email.placeholder": "auth_email_placeholder",
+  "auth.email.required": "auth_email_required",
+  "auth.email.signIn": "auth_email_sign_in",
+  "auth.email.signInFailed": "auth_email_sign_in_failed",
+  "auth.email.signingIn": "auth_email_signing_in",
   "common.all": "common_all",
   "auth.signIn.back": "auth_qr_back",
   "auth.signIn.description": "auth_signin_tv_disabled",
@@ -481,12 +506,6 @@ function interpolate(template, params = {}) {
     .replace(/\\"/g, '"');
 }
 
-function decodeUnicodeEscapes(value) {
-  return String(value ?? "").replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
-    String.fromCharCode(Number.parseInt(hex, 16))
-  );
-}
-
 function parseStringsXml(source) {
   const parser = new DOMParser();
   const xml = parser.parseFromString(source, "application/xml");
@@ -499,7 +518,7 @@ function parseStringsXml(source) {
     if (!name) {
       return messages;
     }
-    messages[name] = decodeUnicodeEscapes(node.textContent || "");
+    messages[name] = decodeAndroidStringEscapes(node.textContent || "");
     return messages;
   }, {});
 }
@@ -544,6 +563,48 @@ async function loadXmlFile(relativePath) {
   throw new Error(`Unable to load translation file: ${relativePath}`);
 }
 
+function loadJsonFileXhr(url) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url, true);
+    xhr.onload = () => {
+      // status 0 is returned for successful file:// loads in webOS
+      if (xhr.status === 200 || xhr.status === 0) {
+        try {
+          const messages = JSON.parse(xhr.responseText);
+          if (
+            !messages ||
+            typeof messages !== "object" ||
+            Array.isArray(messages) ||
+            Object.values(messages).some((message) => typeof message !== "string")
+          ) {
+            throw new Error("Invalid translation bundle");
+          }
+          resolve(messages);
+        } catch (error) {
+          reject(error);
+        }
+      } else {
+        reject(new Error(`XHR status ${xhr.status} for ${url}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error(`XHR error for ${url}`));
+    xhr.send();
+  });
+}
+
+async function loadJsonFile(relativePath) {
+  const candidates = [`res/${relativePath}`, `dist/res/${relativePath}`];
+  for (const candidate of candidates) {
+    try {
+      return await loadJsonFileXhr(candidate);
+    } catch (_) {
+      // Try the next build location, then let the XML loader provide the fallback.
+    }
+  }
+  throw new Error(`Unable to load translation bundle: ${relativePath}`);
+}
+
 async function loadBaseMessages() {
   if (!baseMessagesPromise) {
     baseMessagesPromise = loadXmlFile("values/strings.xml");
@@ -557,6 +618,12 @@ async function loadLocaleMessages(locale) {
   }
 
   const promise = (async () => {
+    try {
+      return await loadJsonFile(`i18n/${locale}.json`);
+    } catch (_) {
+      // Unbuilt development trees can still load the source XML files below.
+    }
+
     const base = await loadBaseMessages();
     if (locale === DEFAULT_LOCALE) {
       return { ...base };

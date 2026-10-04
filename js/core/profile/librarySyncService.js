@@ -3,9 +3,11 @@ import { isMissingResourceError, isSyncBackoffActive } from "../sync/syncBackoff
 import { addonRepository } from "../../data/repository/addonRepository.js";
 import { SupabaseApi } from "../../data/remote/supabase/supabaseApi.js";
 import { ProfileManager } from "./profileManager.js";
+import { getSyncClientId } from "../sync/syncClientIdentity.js";
 
 const ADDONS_TABLE = "addons";
 const TABLE = "tv_addons";
+const SYNC_OVERVIEW_RPC = "get_sync_overview";
 
 // Records the outcome of the latest pull so the Addons screen can show a
 // visible sync state on TV.
@@ -58,50 +60,172 @@ async function resolveAddonProfileId() {
     const id = Number(profile?.profileIndex || profile?.id || 1);
     return Number.isFinite(id) && Math.trunc(id) === profileId;
   });
-  const usesPrimaryAddons =
-    typeof activeProfile?.usesPrimaryAddons === "boolean"
-      ? activeProfile.usesPrimaryAddons
-      : typeof activeProfile?.uses_primary_addons === "boolean"
-        ? activeProfile.uses_primary_addons
-        : true;
+  const usesPrimaryAddons = readRemoteBoolean(
+    activeProfile?.usesPrimaryAddons ?? activeProfile?.uses_primary_addons,
+    false
+  );
 
   return usesPrimaryAddons ? 1 : profileId;
 }
 
-function extractAddonEntries(rows = []) {
-  return (rows || [])
-    .map((row) => ({
-      url: row?.url || row?.base_url || null,
-      displayName:
-        row?.display_name ||
-        row?.displayName ||
-        row?.custom_name ||
-        row?.customName ||
-        row?.alias ||
-        row?.name ||
-        null,
-      name: row?.name || null,
-      enabled: row?.enabled !== false
-    }))
-    .filter((entry) => entry.url);
+function normalizeProfileId(profileId = null) {
+  const raw = Number(profileId == null ? 1 : profileId);
+  return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 1;
 }
 
-function applyPulledAddons(rows = []) {
-  const entries = extractAddonEntries(rows);
+function readRemoteBoolean(value, fallback = true) {
+  if (value == null) return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0") return false;
+  }
+  return fallback;
+}
+
+async function verifyEmptyRemoteAddonSnapshot(profileId) {
+  const profileKey = String(normalizeProfileId(profileId));
+  try {
+    const response = await SupabaseApi.rpc(SYNC_OVERVIEW_RPC, {}, true);
+    const overview =
+      Array.isArray(response) && response.length === 1
+        ? response[0]
+        : response && typeof response === "object" && !Array.isArray(response)
+          ? response
+          : null;
+    const addons =
+      overview?.addons && typeof overview.addons === "object" && !Array.isArray(overview.addons)
+        ? overview.addons
+        : null;
+    const profiles =
+      overview?.profiles &&
+      typeof overview.profiles === "object" &&
+      !Array.isArray(overview.profiles)
+        ? overview.profiles
+        : null;
+    const profileExists =
+      profiles &&
+      Object.prototype.hasOwnProperty.call(profiles, profileKey) &&
+      profiles[profileKey] &&
+      typeof profiles[profileKey] === "object" &&
+      !Array.isArray(profiles[profileKey]);
+    const hasAddonCount = addons && Object.prototype.hasOwnProperty.call(addons, profileKey);
+    const rawAddonCount = hasAddonCount ? addons[profileKey] : 0;
+    const addonCount = Number(rawAddonCount);
+    const validAddonCount =
+      (!hasAddonCount || typeof rawAddonCount === "number" || typeof rawAddonCount === "string") &&
+      Number.isInteger(addonCount) &&
+      addonCount >= 0;
+    const verified = Boolean(profileExists && validAddonCount && addonCount === 0);
+    console.warn("Addon sync empty snapshot verification", {
+      targetProfileId: profileKey,
+      profileExists: Boolean(profileExists),
+      addonCount: validAddonCount ? addonCount : null,
+      verified
+    });
+    return verified;
+  } catch (error) {
+    console.warn("Addon sync empty snapshot verification failed", error);
+    return false;
+  }
+}
+
+function extractAddonEntries(rows = []) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => {
+      const rawSortOrder = row?.sort_order ?? row?.sortOrder ?? row?.position ?? index;
+      const sortOrder = Number(rawSortOrder);
+      return {
+        url: row?.url || row?.base_url || null,
+        displayName:
+          row?.display_name ||
+          row?.displayName ||
+          row?.custom_name ||
+          row?.customName ||
+          row?.alias ||
+          row?.name ||
+          null,
+        name: row?.name || null,
+        enabled: readRemoteBoolean(row?.enabled),
+        sortOrder: Number.isFinite(sortOrder) ? sortOrder : index,
+        sourceIndex: index
+      };
+    })
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.sourceIndex - right.sourceIndex)
+    .filter((entry) => entry.url)
+    .filter(
+      (entry, index, values) =>
+        values.findIndex(
+          (candidate) =>
+            addonRepository.normalizeUrl(candidate.url) === addonRepository.normalizeUrl(entry.url)
+        ) === index
+    );
+}
+
+function applyPulledAddons(entries = []) {
   const urls = entries.map((entry) => entry.url).filter(Boolean);
-  const currentNames = addonRepository.getAddonDisplayNameOverrides();
   addonRepository.setAddonDisplayNameOverrides(
     entries.map((entry) => {
       const cleanUrl = addonRepository.canonicalizeUrl(entry.url);
       return {
         url: entry.url,
-        name: entry.displayName || entry.name || currentNames[cleanUrl] || ""
+        name:
+          entry.displayName ||
+          entry.name ||
+          addonRepository.getAddonDisplayNameOverride(cleanUrl) ||
+          ""
       };
     }),
     { replace: true }
   );
   addonRepository.setAddonEnabledStates(entries, { replace: true });
   return urls;
+}
+
+function prepareRemoteAddonSnapshot(rows, { allowVerifiedEmptySnapshot = false } = {}) {
+  const entries = extractAddonEntries(rows);
+  const urls = entries.map((entry) => entry.url).filter(Boolean);
+  const localUrls = addonRepository.getInstalledAddonUrls();
+
+  // Android TV does not treat an empty remote snapshot as authoritative when
+  // local addons already exist. An empty response must not erase the addon list
+  // (or its names/enabled states) used by catalog, stream, and subtitle repositories.
+  if (urls.length === 0 && !allowVerifiedEmptySnapshot) {
+    if (localUrls.length > 0) {
+      console.warn(
+        `Addon sync pull returned an empty remote list while local has ${localUrls.length} entries; preserving local addons`
+      );
+    }
+    return { urls: [...localUrls], shouldApply: false };
+  }
+
+  applyPulledAddons(entries);
+  return { urls, shouldApply: true };
+}
+
+async function reconcileRemoteAddonSnapshot(rows, options = {}) {
+  const { urls, shouldApply } = prepareRemoteAddonSnapshot(rows, options);
+  if (shouldApply) {
+    await addonRepository.setAddonOrder(urls, { silent: true, allowReadOnly: true });
+  }
+  return urls;
+}
+
+async function reconcileFetchedAddonSnapshot(rows, profileId, requestedProfileId) {
+  if (String(ProfileManager.getActiveProfileId()) !== String(requestedProfileId)) {
+    return addonRepository.getInstalledAddonUrls();
+  }
+  const allowVerifiedEmptySnapshot =
+    Array.isArray(rows) &&
+    rows.length === 0 &&
+    addonRepository.getInstalledAddonUrls().length > 0 &&
+    (await verifyEmptyRemoteAddonSnapshot(profileId));
+  if (String(ProfileManager.getActiveProfileId()) !== String(requestedProfileId)) {
+    return addonRepository.getInstalledAddonUrls();
+  }
+  return reconcileRemoteAddonSnapshot(rows, { allowVerifiedEmptySnapshot });
 }
 
 export const LibrarySyncService = {
@@ -120,9 +244,18 @@ export const LibrarySyncService = {
         recordPullStatus("signed-out");
         return [];
       }
+      const requestedProfileId = String(ProfileManager.getActiveProfileId() || "1");
       const localUrls = addonRepository.getInstalledAddonUrls();
       const profileId = await resolveAddonProfileId();
+      if (String(ProfileManager.getActiveProfileId()) !== requestedProfileId) {
+        recordPullStatus("stale", { count: localUrls.length });
+        return addonRepository.getInstalledAddonUrls();
+      }
       const ownerId = await AuthManager.getEffectiveUserId();
+      if (String(ProfileManager.getActiveProfileId()) !== requestedProfileId) {
+        recordPullStatus("stale", { count: localUrls.length });
+        return addonRepository.getInstalledAddonUrls();
+      }
       let addonTableMissing = false;
 
       try {
@@ -131,8 +264,11 @@ export const LibrarySyncService = {
           `user_id=eq.${encodeURIComponent(ownerId)}&profile_id=eq.${profileId}&select=*&order=sort_order.asc`,
           true
         );
-        const addonUrls = applyPulledAddons(addonRows);
-        await addonRepository.setAddonOrder(addonUrls, { silent: true });
+        const addonUrls = await reconcileFetchedAddonSnapshot(
+          addonRows,
+          profileId,
+          requestedProfileId
+        );
         recordPullStatus("ok", { count: addonUrls.length });
         return addonUrls;
       } catch (addonsTableError) {
@@ -153,8 +289,7 @@ export const LibrarySyncService = {
           `owner_id=eq.${encodeURIComponent(ownerId)}&select=*&order=position.asc`,
           true
         );
-        const urls = applyPulledAddons(rows);
-        await addonRepository.setAddonOrder(urls, { silent: true });
+        const urls = await reconcileFetchedAddonSnapshot(rows, profileId, requestedProfileId);
         recordPullStatus("ok", { count: urls.length });
         return urls;
       } catch (tvTableError) {
@@ -175,8 +310,7 @@ export const LibrarySyncService = {
             { p_profile_id: profileId },
             true
           );
-          const urls = applyPulledAddons(rpcRows);
-          await addonRepository.setAddonOrder(urls, { silent: true });
+          const urls = await reconcileFetchedAddonSnapshot(rpcRows, profileId, requestedProfileId);
           recordPullStatus("ok", { count: urls.length });
           return urls;
         } catch (rpcError) {
@@ -209,8 +343,18 @@ export const LibrarySyncService = {
       if (!AuthManager.isAuthenticated) {
         return false;
       }
+      const requestedProfileId = await resolveProfileId();
       const profileId = await resolveAddonProfileId();
+      // Android treats a secondary profile that inherits the primary addon
+      // set as read-only. Do not publish the primary profile's local state
+      // merely because this profile became active.
+      if (requestedProfileId !== profileId) {
+        return true;
+      }
       const urls = addonRepository.getInstalledAddonUrls();
+      if ((await resolveProfileId()) !== requestedProfileId) {
+        return false;
+      }
 
       try {
         await SupabaseApi.rpc(
@@ -224,7 +368,8 @@ export const LibrarySyncService = {
               ...(addonRepository.getAddonDisplayNameOverride(url)
                 ? { name: addonRepository.getAddonDisplayNameOverride(url) }
                 : {})
-            }))
+            })),
+            p_origin_client_id: getSyncClientId()
           },
           true
         );

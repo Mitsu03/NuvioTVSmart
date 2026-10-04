@@ -1,8 +1,9 @@
 import { ScreenUtils } from "../../navigation/screen.js";
-import { Router } from "../../navigation/router.js";
+import { Router } from "../../navigation/routerState.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { LibrarySyncService } from "../../../core/profile/librarySyncService.js";
 import { addonRepository } from "../../../data/repository/addonRepository.js";
+import { catalogRepository } from "../../../data/repository/catalogRepository.js";
 import { Platform } from "../../../platform/index.js";
 import { QrCodeGenerator } from "../../../core/qr/qrCodeGenerator.js";
 import { ExperienceModeStore } from "../../../data/local/experienceModeStore.js";
@@ -88,7 +89,7 @@ export const PluginScreen = {
     return "No addons linked yet. Add them on your phone, then press Refresh.";
   },
 
-  async refreshAddons() {
+  async refreshAddons({ refreshCatalogs = false } = {}) {
     if (this.syncing) {
       return;
     }
@@ -98,6 +99,18 @@ export const PluginScreen = {
       await LibrarySyncService.pull();
     } catch (error) {
       console.warn("Addon refresh failed", error);
+    } finally {
+      // Android emits its manual refresh event even when addon reconciliation fails.
+      // Smart has a response cache where Android re-requests the visible catalogs,
+      // so refresh enabled manifests and invalidate responses for the explicit action.
+      if (refreshCatalogs) {
+        try {
+          await addonRepository.refreshInstalledAddons();
+        } catch (error) {
+          console.warn("Addon manifest refresh failed", error);
+        }
+        catalogRepository.clearCache();
+      }
     }
     this.syncing = false;
     if (Router.getCurrent() === "plugin") {
@@ -211,13 +224,13 @@ export const PluginScreen = {
       Router.navigate("catalogOrder");
     });
     this.actionMap.set("refresh_addons", async () => {
-      await this.refreshAddons();
+      await this.refreshAddons({ refreshCatalogs: true });
     });
     this.actionMap.set("close_qr_overlay", async () => {
       await this.closeQrOverlay();
     });
 
-    const enterClass = this.pluginRouteEnterPending ? " nuvio-route-slide-enter" : "";
+    const enterClass = this.pluginRouteEnterPending ? " nuvio-route-fade-enter" : "";
     this.container.innerHTML = `
       <div class="addons-shell addons-route-shell">
         <div class="addons-route-content${enterClass}">

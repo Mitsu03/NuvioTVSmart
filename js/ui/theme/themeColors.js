@@ -1,3 +1,67 @@
+import {
+  areCustomThemeColorsSolid,
+  normalizeCustomThemeColors,
+  resolveCustomThemeColors
+} from "../../core/util/customThemeColors.js";
+
+function parseColor(hex) {
+  const value = String(hex || "").replace(/^#/, "");
+  return [0, 2, 4].map((offset) => parseInt(value.slice(offset, offset + 2), 16));
+}
+
+function formatColor(channels) {
+  return `#${channels
+    .map((channel) =>
+      Math.max(0, Math.min(255, Math.round(channel)))
+        .toString(16)
+        .padStart(2, "0")
+    )
+    .join("")
+    .toUpperCase()}`;
+}
+
+function mixColor(base, accent, amount) {
+  const baseChannels = parseColor(base);
+  const accentChannels = parseColor(accent);
+  return formatColor(
+    baseChannels.map((channel, index) => channel + (accentChannels[index] - channel) * amount)
+  );
+}
+
+function colorLuminance(hex) {
+  const [red, green, blue] = parseColor(hex).map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return red * 0.2126 + green * 0.7152 + blue * 0.0722;
+}
+
+function customThemePalette(value) {
+  const [first, accent, third] = normalizeCustomThemeColors(value);
+  const solid = areCustomThemeColorsSolid([first, accent, third]);
+  const focusColor = [first, accent, third].reduce((brightest, color) =>
+    colorLuminance(color) > colorLuminance(brightest) ? color : brightest
+  );
+
+  return {
+    "--bg-color": mixColor("#0C0D0F", accent, 0.025),
+    "--bg-elevated": mixColor("#17191D", accent, 0.045),
+    "--card-bg": mixColor("#20242A", accent, 0.06),
+    "--secondary-color": accent,
+    "--secondary-variant": third,
+    "--on-secondary": colorLuminance(accent) > 0.179 ? "#000000" : "#FFFFFF",
+    "--text-color": "#FFFFFF",
+    "--text-secondary": "#B3B3B3",
+    "--text-tertiary": "#808080",
+    "--border-color": "#333333",
+    "--focus-color": focusColor,
+    "--focus-bg": mixColor("#242424", accent, 0.18),
+    "--accent-gradient": solid
+      ? accent
+      : `linear-gradient(90deg, ${first} 0%, ${accent} 50%, ${third} 100%)`
+  };
+}
+
 const palettes = {
   GOLD: {
     "--bg-color": "#0f0e0b",
@@ -11,7 +75,9 @@ const palettes = {
     "--text-tertiary": "#808080",
     "--border-color": "#333333",
     "--focus-color": "#ffd45c",
-    "--focus-bg": "#3d2d1a"
+    "--focus-bg": "#3d2d1a",
+    "--accent-gradient":
+      "linear-gradient(90deg, #8a5700 0%, #e8a91c 25%, #fff1a8 50%, #ffd45c 75%, #9a6200 100%)"
   },
   JADE: {
     "--bg-color": "#0b0f0d",
@@ -25,7 +91,8 @@ const palettes = {
     "--text-tertiary": "#808080",
     "--border-color": "#333333",
     "--focus-color": "#7bf08d",
-    "--focus-bg": "#153a2c"
+    "--focus-bg": "#153a2c",
+    "--accent-gradient": "linear-gradient(90deg, #7bf08d 0%, #22d37c 50%, #0bbf9a 100%)"
   },
   ROSE_GOLD: {
     "--bg-color": "#100c0f",
@@ -39,7 +106,8 @@ const palettes = {
     "--text-tertiary": "#808080",
     "--border-color": "#333333",
     "--focus-color": "#ffb37a",
-    "--focus-bg": "#442037"
+    "--focus-bg": "#442037",
+    "--accent-gradient": "linear-gradient(90deg, #b75aff 0%, #ec70a9 50%, #ffb37a 100%)"
   },
   ARCTIC_BLUE: {
     "--bg-color": "#0b0e14",
@@ -53,7 +121,8 @@ const palettes = {
     "--text-tertiary": "#808080",
     "--border-color": "#333333",
     "--focus-color": "#4de3ff",
-    "--focus-bg": "#172844"
+    "--focus-bg": "#172844",
+    "--accent-gradient": "linear-gradient(90deg, #4de3ff 0%, #3185f5 50%, #4d55e8 100%)"
   },
   GRAPHITE: {
     "--bg-color": "#0c0d0f",
@@ -67,7 +136,8 @@ const palettes = {
     "--text-tertiary": "#808080",
     "--border-color": "#333333",
     "--focus-color": "#f3f5f7",
-    "--focus-bg": "#30343a"
+    "--focus-bg": "#30343a",
+    "--accent-gradient": "linear-gradient(90deg, #f3f5f7 0%, #aab2be 50%, #687381 100%)"
   },
   WHITE: {
     "--bg-color": "#0d0d0d",
@@ -173,7 +243,11 @@ export const ThemeColors = {
   dark: palettes.WHITE,
   palettes,
 
-  getPalette(themeName = "WHITE") {
-    return palettes[String(themeName || "WHITE").toUpperCase()] || palettes.WHITE;
+  getPalette(themeName = "WHITE", customColors = null) {
+    const normalizedThemeName = String(themeName || "WHITE").toUpperCase();
+    if (normalizedThemeName === "CUSTOM") {
+      return customThemePalette(customColors || resolveCustomThemeColors(null, false));
+    }
+    return palettes[normalizedThemeName] || palettes.WHITE;
   }
 };

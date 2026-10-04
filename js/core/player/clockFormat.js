@@ -28,10 +28,13 @@ function resolveIntlHour12(intlApi, locale = undefined) {
 
 export function parsePlatformTimeFormat(format) {
   const normalized = String(format || "").replace(/'[^']*'/g, "");
-  if (/[hK]/.test(normalized)) {
+  // Tizen's time format uses `h` for both hour cycles; `ap` is the
+  // discriminator for 12-hour output. Keep the LDML fallbacks for runtimes
+  // that expose an uppercase hour-cycle token instead.
+  if (/\b(?:ap|a)\b/i.test(normalized) || /K/.test(normalized)) {
     return true;
   }
-  if (/[Hk]/.test(normalized)) {
+  if (/[Hhk]/.test(normalized)) {
     return false;
   }
   return null;
@@ -59,14 +62,23 @@ export function resolveSystemHour12({
   webOsLocaleInfo = null,
   intlApi = null
 } = {}) {
-  try {
-    const platformFormat = tizenApi?.time?.getTimeFormat?.();
-    const platformHour12 = parsePlatformTimeFormat(platformFormat);
-    if (typeof platformHour12 === "boolean") {
-      return platformHour12;
+  if (typeof tizenApi?.time?.getTimeFormat === "function") {
+    // Tizen 9 can report an `ap` pattern even when the browser's default
+    // formatter follows the TV's 24-hour cycle. Intl is the formatter used
+    // below, so prefer its resolved cycle and keep the Tizen API as fallback.
+    const intlHour12 = resolveIntlHour12(intlApi);
+    if (typeof intlHour12 === "boolean") {
+      return intlHour12;
     }
-  } catch (_) {
-    // Fall back to the browser runtime when the platform API is unavailable.
+
+    try {
+      const platformHour12 = parsePlatformTimeFormat(tizenApi.time.getTimeFormat());
+      if (typeof platformHour12 === "boolean") {
+        return platformHour12;
+      }
+    } catch (_) {
+      // Fall back to the browser runtime when the platform API is unavailable.
+    }
   }
 
   const webOsHour12 = resolveWebOsHour12(webOsLocaleInfo, intlApi);
