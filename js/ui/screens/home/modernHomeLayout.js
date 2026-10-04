@@ -11,6 +11,9 @@ export const MODERN_HOME_CONSTANTS = {
   cameraFollowDurationXMs: 440,
   cameraFollowDurationYMs: 440,
   cameraSafetyDurationMs: 180,
+  verticalScrollSettlePollMs: 60,
+  smartTvLazyHydrationDebounceMs: 240,
+  smartTvTrailerCleanupDelayMs: 900,
   springScrollStiffness: 180,
   springScrollDampingRatio: 0.95,
   rowFocusInset: 40,
@@ -66,6 +69,7 @@ export function renderModernHomeLayout({
     const rowKey = String(rowData?.homeCatalogKey || buildModernRowKey(rowData));
     const seeAllId = `${rowData.addonId || "addon"}_${rowData.catalogId || "catalog"}_${rowData.type || "movie"}`;
     if (!isLoading && !isCollectionRow) {
+      const catalogResultData = rowData?.result?.data || {};
       catalogSeeAllMap.set(seeAllId, {
         addonBaseUrl: rowData.addonBaseUrl || "",
         addonId: rowData.addonId || "",
@@ -74,7 +78,10 @@ export function renderModernHomeLayout({
         catalogName: rowData.catalogName || "",
         type: rowData.type || "movie",
         initialItems: items,
-        initialNextSkip: Number(rowData?.result?.data?.nextSkip || 0)
+        initialNextSkip: Number(catalogResultData.nextSkip || 0),
+        initialHasMore: Boolean(catalogResultData.hasMore),
+        supportsSkip: rowData.supportsSkip !== false && catalogResultData.supportsSkip !== false,
+        skipStep: Number(rowData.skipStep || catalogResultData.skipStep || 100)
       });
     }
 

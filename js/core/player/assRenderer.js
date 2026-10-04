@@ -52,7 +52,9 @@ export function createAssRenderer({
   container,
   selectionToken,
   isCurrentSelection,
-  resampling = "video_height"
+  resampling = "video_height",
+  forceRafFrameLoop = false,
+  forcePlaybackFrameLoopKick = false
 }) {
   if (!body || !video || !container) {
     return { ok: false, error: "ass-renderer-missing-arguments" };
@@ -62,67 +64,6 @@ export function createAssRenderer({
 
   let instance = null;
   let destroyed = false;
-  let restoreVideoFrameCallback = null;
-
-  /**
-   * ass.js drives its render loop with requestVideoFrameCallback whenever the video
-   * element exposes it, falling back to requestAnimationFrame otherwise. webOS
-   * exposes the API but never invokes it: the video is composited on a hardware
-   * plane, so no frame is ever presented to the page. The loop then waits on a
-   * callback that never arrives and subtitles stay on whatever cue was painted when
-   * the instance was built.
-   *
-   * Route it through requestAnimationFrame for this instance instead - measured at
-   * a steady 60fps on the same page - and restore the original on destroy.
-   */
-  function useAnimationFrameForRendering() {
-    if (typeof video.requestVideoFrameCallback !== "function") {
-      return;
-    }
-    const original = video.requestVideoFrameCallback;
-    const originalCancel = video.cancelVideoFrameCallback;
-    const descriptor = Object.getOwnPropertyDescriptor(video, "requestVideoFrameCallback");
-    const cancelDescriptor = Object.getOwnPropertyDescriptor(video, "cancelVideoFrameCallback");
-    try {
-      Object.defineProperty(video, "requestVideoFrameCallback", {
-        configurable: true,
-        writable: true,
-        // ass.js reads metadata?.mediaTime and falls back to video.currentTime,
-        // so omitting the metadata argument is enough.
-        value: (callback) => requestAnimationFrame((now) => callback(now))
-      });
-      Object.defineProperty(video, "cancelVideoFrameCallback", {
-        configurable: true,
-        writable: true,
-        value: (handle) => cancelAnimationFrame(handle)
-      });
-    } catch (_) {
-      return;
-    }
-    restoreVideoFrameCallback = () => {
-      try {
-        if (descriptor) {
-          Object.defineProperty(video, "requestVideoFrameCallback", descriptor);
-        } else {
-          delete video.requestVideoFrameCallback;
-          if (typeof original === "function") {
-            video.requestVideoFrameCallback = original;
-          }
-        }
-        if (cancelDescriptor) {
-          Object.defineProperty(video, "cancelVideoFrameCallback", cancelDescriptor);
-        } else {
-          delete video.cancelVideoFrameCallback;
-          if (typeof originalCancel === "function") {
-            video.cancelVideoFrameCallback = originalCancel;
-          }
-        }
-      } catch (_) {
-        // Best effort.
-      }
-      restoreVideoFrameCallback = null;
-    };
-  }
 
   return {
     get active() {
@@ -185,8 +126,27 @@ export function createAssRenderer({
             detail: "ASS body lacks an [Events] section with Dialogue rows"
           };
         }
-        useAnimationFrameForRendering();
-        instance = new AssConstructor(sourceBody, video, { container, resampling });
+        // webOS advertises requestVideoFrameCallback but never invokes it for
+        // its video pipeline (measured 0 callbacks over 6s of playback while
+        // requestAnimationFrame ticked normally), and ass.js schedules its
+        // frame loop on rVFC when present — so cues paint once and freeze
+        // (#844). Shadow the method while the constructor captures its frame
+        // scheduler so ass.js binds requestAnimationFrame instead, then
+        // restore the element.
+        const shadowRvfc =
+          forceRafFrameLoop &&
+          typeof video.requestVideoFrameCallback === "function" &&
+          !Object.prototype.hasOwnProperty.call(video, "requestVideoFrameCallback");
+        if (shadowRvfc) {
+          video.requestVideoFrameCallback = undefined;
+        }
+        try {
+          instance = new AssConstructor(sourceBody, video, { container, resampling });
+        } finally {
+          if (shadowRvfc) {
+            delete video.requestVideoFrameCallback;
+          }
+        }
         debugAssRender("constructed", {
           token,
           childCount: Number(container.childNodes?.length || 0),
@@ -208,7 +168,10 @@ export function createAssRenderer({
         // would freeze at its initial seek. Re-dispatch play (ass.js listens
         // to both play and playing, but the player binds only playing, so a
         // synthetic playing would trigger onPlaying side effects).
-        if (video && typeof video.paused === "boolean" && !video.paused) {
+        const shouldKickPlaybackFrameLoop =
+          typeof video.dispatchEvent === "function" &&
+          (forcePlaybackFrameLoopKick || (typeof video.paused === "boolean" && !video.paused));
+        if (shouldKickPlaybackFrameLoop) {
           try {
             // Legacy webOS runtimes may lack the Event constructor; fall back
             // to document.createEvent like PlayerController.emitVideoEvent.
@@ -280,7 +243,6 @@ export function createAssRenderer({
         return;
       }
       destroyed = true;
-      restoreVideoFrameCallback?.();
       if (instance) {
         try {
           instance.destroy();

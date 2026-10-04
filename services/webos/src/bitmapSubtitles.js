@@ -8,6 +8,7 @@ var MAX_CUES_BYTES = 8 * 1024 * 1024;
 var MAX_CLUSTER_BYTES = 20 * 1024 * 1024;
 var MAX_WINDOW_BYTES = 3 * 1024 * 1024;
 var MAX_BLOCK_BYTES = 1024 * 1024;
+var MAX_CUED_FRAME_CACHE_BYTES = 2 * 1024 * 1024;
 var CUED_BLOCK_PROBE_BYTES = 64 * 1024;
 var MAX_CUED_BLOCK_ELEMENT_BYTES = MAX_BLOCK_BYTES + 64 * 1024;
 var MIN_CLUSTER_HEADER_BYTES = 5;
@@ -18,6 +19,8 @@ var METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
 var WINDOW_CACHE_TTL_MS = 5 * 60 * 1000;
 var MAX_METADATA_CACHE_ENTRIES = 6;
 var MAX_WINDOW_CACHE_ENTRIES = 12;
+var MAX_CUED_FRAME_CACHE_ENTRIES = 512;
+var CUED_FRAME_CACHE_TTL_MS = 5 * 60 * 1000;
 var WINDOW_BUCKET_SECONDS = 90;
 var WINDOW_END_QUANTUM_SECONDS = 30;
 var MIN_WINDOW_SECONDS = 120;
@@ -66,6 +69,7 @@ var ID_CUE_TRACK_POSITIONS = 0xb7;
 var ID_CUE_TRACK = 0xf7;
 var ID_CUE_CLUSTER_POSITION = 0xf1;
 var ID_CUE_RELATIVE_POSITION = 0xf0;
+var ID_CUE_DURATION = 0xb2;
 var ID_CLUSTER = 0x1f43b675;
 var ID_CLUSTER_TIMECODE = 0xe7;
 var ID_SIMPLE_BLOCK = 0xa3;
@@ -88,6 +92,8 @@ var windowCache = new Map();
 var windowRequests = new Map();
 var textWindowCache = new Map();
 var textWindowRequests = new Map();
+var cuedFrameCache = new Map();
+var cuedFrameCacheBytes = 0;
 var clusterRangeRequests = new Map();
 var activePgsWindowRequests = new Map();
 var activeTextWindowRequests = new Map();
@@ -135,6 +141,62 @@ function setCached(cache, key, value, ttlMs, maxEntries) {
   cache.delete(key);
   cache.set(key, { value: value, expiresAt: Date.now() + ttlMs });
   trimCache(cache, maxEntries);
+}
+
+function getCachedCuedFrame(key) {
+  var entry = cuedFrameCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    cuedFrameCache.delete(key);
+    cuedFrameCacheBytes -= entry.bytes;
+    return null;
+  }
+  cuedFrameCache.delete(key);
+  cuedFrameCache.set(key, entry);
+  return entry.value;
+}
+
+function setCachedCuedFrame(key, frame) {
+  var payloadBytes = Number(frame && frame.payload && frame.payload.length) || 0;
+  if (payloadBytes > MAX_CUED_FRAME_CACHE_BYTES) return;
+  var previous = cuedFrameCache.get(key);
+  if (previous) {
+    cuedFrameCacheBytes -= previous.bytes;
+    cuedFrameCache.delete(key);
+  }
+  cuedFrameCache.set(key, {
+    value: frame,
+    expiresAt: Date.now() + CUED_FRAME_CACHE_TTL_MS,
+    bytes: payloadBytes
+  });
+  cuedFrameCacheBytes += payloadBytes;
+  while (
+    cuedFrameCache.size > MAX_CUED_FRAME_CACHE_ENTRIES ||
+    cuedFrameCacheBytes > MAX_CUED_FRAME_CACHE_BYTES
+  ) {
+    var oldestKey = cuedFrameCache.keys().next().value;
+    var oldest = cuedFrameCache.get(oldestKey);
+    cuedFrameCache.delete(oldestKey);
+    cuedFrameCacheBytes -= oldest ? oldest.bytes : 0;
+  }
+}
+
+function cuedFrameCacheKey(mediaUrl, track, cue) {
+  return (
+    mediaUrl +
+    "::" +
+    String(track && track.number) +
+    "::" +
+    String(cue && cue.clusterPosition) +
+    "::" +
+    String(cue && cue.relativePosition) +
+    "::" +
+    String(cue && cue.timeTicks) +
+    "::" +
+    String(cue && cue.timeMs) +
+    "::" +
+    String(cue && cue.durationTicks)
+  );
 }
 
 function requestRange(url, start, end, maxBytes, redirects, requestContext) {
@@ -461,13 +523,15 @@ function parseCues(data, timecodeScaleNs) {
         data,
         findChild(data, position, ID_CUE_RELATIVE_POSITION)
       );
+      var durationTicks = readUnsigned(data, findChild(data, position, ID_CUE_DURATION));
       if (track == null || clusterPosition == null) return;
       cues.push({
         timeMs: timeMs,
         timeTicks: cueTicks,
         track: track,
         clusterPosition: clusterPosition,
-        relativePosition: relativePosition
+        relativePosition: relativePosition,
+        durationTicks: durationTicks
       });
     });
   });
@@ -704,6 +768,19 @@ function getTrackCues(metadata, trackNumber) {
   });
 }
 
+function selectTextSubtitleCues(metadata, trackNumber, startMs, endMs) {
+  var trackCues = getTrackCues(metadata, trackNumber);
+  var selected = trackCues.filter(function (cue) {
+    return cue.timeMs >= startMs && cue.timeMs <= endMs;
+  });
+  var previous = null;
+  trackCues.forEach(function (cue) {
+    if (cue.timeMs < startMs && (!previous || cue.timeMs > previous.timeMs)) previous = cue;
+  });
+  if (previous && startMs - previous.timeMs <= 30000) selected.unshift(previous);
+  return selected;
+}
+
 function cuePositionKey(cue) {
   return cue.clusterPosition + ":" + cue.relativePosition;
 }
@@ -803,10 +880,12 @@ function findCuedBlockElement(data, track) {
 
 function parseCuedBlock(data, element, track, cue, timecodeScaleNs) {
   var block = null;
+  var blockDurationTicks = 0;
   if (element.id === ID_SIMPLE_BLOCK) {
     block = element;
   } else if (element.id === ID_BLOCK_GROUP) {
     block = findChild(data, element, ID_BLOCK);
+    blockDurationTicks = readUnsigned(data, findChild(data, element, ID_BLOCK_DURATION)) || 0;
   }
   if (!block) {
     throw invalidCuePosition("CueRelativePosition did not reference a subtitle block", {
@@ -834,9 +913,14 @@ function parseCuedBlock(data, element, track, cue, timecodeScaleNs) {
     throw bitmapSubtitleError("BLOCK_TOO_LARGE", "Bitmap subtitle block exceeded its safety limit");
   }
   var timestampNs = cue.timeTicks * timecodeScaleNs;
+  var durationTicks = blockDurationTicks || Number(cue.durationTicks || 0);
   return {
     timestampMs: cue.timeMs,
     timestampNs: timestampNs,
+    durationMs:
+      Number.isFinite(durationTicks) && durationTicks > 0
+        ? (durationTicks * timecodeScaleNs) / 1000000
+        : 0,
     payload: payload,
     blockOrder: cue.relativePosition,
     clusterPosition: cue.clusterPosition
@@ -917,9 +1001,20 @@ async function loadCueFrames(mediaUrl, metadata, track, cues, requestContext) {
     directCues,
     MAX_CONCURRENT_CUED_BLOCK_REQUESTS,
     async function (cue) {
+      if (requestContext && requestContext.cancelled) {
+        throw bitmapSubtitleError("REQUEST_SUPERSEDED", "Bitmap subtitle request was superseded");
+      }
+      var cacheKey = cuedFrameCacheKey(mediaUrl, track, cue);
+      var cachedFrame = getCachedCuedFrame(cacheKey);
+      if (cachedFrame) return { frame: cachedFrame };
       try {
+        var frame = await loadCuedBlockFrame(mediaUrl, metadata, track, cue, requestContext);
+        setCachedCuedFrame(cacheKey, frame);
+        if (requestContext && requestContext.cancelled) {
+          throw bitmapSubtitleError("REQUEST_SUPERSEDED", "Bitmap subtitle request was superseded");
+        }
         return {
-          frame: await loadCuedBlockFrame(mediaUrl, metadata, track, cue, requestContext)
+          frame: frame
         };
       } catch (error) {
         if (error && error.code === "INVALID_CUE_POSITION") {
@@ -984,6 +1079,22 @@ function isTextSubtitleTrack(track) {
   );
 }
 
+function findTextSubtitleTrack(metadata, trackNumber, trackOrdinal) {
+  var normalizedTrackNumber = Math.trunc(Number(trackNumber));
+  if (Number.isFinite(normalizedTrackNumber) && normalizedTrackNumber > 0) {
+    var exactTrack = metadata.tracks.find(function (entry) {
+      return entry.number === normalizedTrackNumber && isTextSubtitleTrack(entry);
+    });
+    if (exactTrack) return exactTrack;
+  }
+
+  var normalizedTrackOrdinal = Math.trunc(Number(trackOrdinal));
+  if (!Number.isFinite(normalizedTrackOrdinal) || normalizedTrackOrdinal < 0) {
+    return null;
+  }
+  return metadata.tracks.filter(isTextSubtitleTrack)[normalizedTrackOrdinal] || null;
+}
+
 function isAssSubtitleCodec(value) {
   var text = String(value || "").trim();
   if (!text) return false;
@@ -1003,14 +1114,41 @@ function isAssTextSubtitleTrack(track) {
   );
 }
 
+function isIntegerField(value) {
+  return /^-?\d+$/.test(String(value || "").trim());
+}
+
+function isOptionalIntegerField(value) {
+  var text = String(value || "").trim();
+  return text === "" || /^-?\d+$/.test(text);
+}
+
+// A Matroska ASS/SSA block is ReadOrder, Layer, Style, Name, MarginL,
+// MarginR, MarginV, Effect, Text. The packet has no timestamps: those come
+// from the enclosing Block/BlockGroup. SSA commonly leaves Layer empty, and
+// some producers leave margins empty, so those fields must remain optional.
+function isMatroskaAssPacketShape(fields) {
+  return (
+    fields.length >= 9 &&
+    isIntegerField(fields[0]) &&
+    isOptionalIntegerField(fields[1]) &&
+    isOptionalIntegerField(fields[4]) &&
+    isOptionalIntegerField(fields[5]) &&
+    isOptionalIntegerField(fields[6])
+  );
+}
+
 function isAssTimestamp(value) {
   return /^\s*\d+:\d{1,2}:\d{1,2}[.:]\d{1,3}\s*$/.test(String(value || ""));
 }
 
-function isRawAssControlPayload(value) {
+function isRawAssControlPayload(value, track) {
   var text = String(value || "").trim();
   if (!text) return false;
   var payload = text.replace(/^\s*(?:Dialogue|Comment)\s*:\s*/i, "");
+  if (isAssTextSubtitleTrack(track) && isMatroskaAssPacketShape(payload.split(","))) {
+    return false;
+  }
   // Timed Dialogue/Comment rows are valid ASS subtitle events and must be
   // parsed below; only positional AVPlay control CSV is rejected here.
   return (
@@ -1076,7 +1214,9 @@ function normalizeTextSubtitlePayload(track, payload) {
 
   // Inspect the original payload before removing Dialogue:/Comment: so
   // structured ASS control rows are filtered without dropping plain cue text.
-  if (isAssTextSubtitleTrack(track) && isRawAssControlPayload(text)) {
+  // A complete Matroska ASS/SSA packet is explicitly allowed here because
+  // its first numeric field is ReadOrder, not an AVPlay control identifier.
+  if (isAssTextSubtitleTrack(track) && isRawAssControlPayload(text, track)) {
     return "";
   }
   var assEvent = text.replace(/^\s*Dialogue\s*:\s*/i, "");
@@ -1097,13 +1237,7 @@ function normalizeTextSubtitlePayload(track, payload) {
     isAssTextSubtitleTrack(track) &&
     !hasLayeredAssTiming &&
     !hasShortAssTiming &&
-    fields.length >= 9 &&
-    /^-?\d+$/.test(String(fields[0] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[1] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[4] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[5] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[6] || "").trim()) &&
-    String(fields[7] || "").trim() === "";
+    isMatroskaAssPacketShape(fields);
   if (hasLayeredAssTiming) {
     text = textAfterCommaCount(assEvent, 9) || "";
   } else if (hasShortAssTiming) {
@@ -1150,10 +1284,9 @@ function getEmbeddedAssCueDurationMs(frame) {
 function getTextCueEndMs(frame, nextFrame) {
   var startMs = Number(frame && frame.timestampMs);
   if (!Number.isFinite(startMs)) return 0;
-  var embeddedDurationMs = getEmbeddedAssCueDurationMs(frame);
-  if (embeddedDurationMs > 0) {
-    return startMs + Math.min(embeddedDurationMs, MAX_TEXT_CUE_DURATION_MS);
-  }
+  // Matroska packet text has no timing fields. Prefer the enclosing block's
+  // duration, then the next packet; keep the embedded-timestamp path only as
+  // a compatibility fallback for legacy non-Matroska payloads.
   var durationMs = Number(frame && frame.durationMs);
   if (Number.isFinite(durationMs) && durationMs > 0) {
     return startMs + Math.min(durationMs, MAX_TEXT_CUE_DURATION_MS);
@@ -1161,6 +1294,10 @@ function getTextCueEndMs(frame, nextFrame) {
   var nextStartMs = Number(nextFrame && nextFrame.timestampMs);
   if (Number.isFinite(nextStartMs) && nextStartMs > startMs) {
     return Math.min(nextStartMs, startMs + MAX_TEXT_CUE_DURATION_MS);
+  }
+  var embeddedDurationMs = getEmbeddedAssCueDurationMs(frame);
+  if (embeddedDurationMs > 0) {
+    return startMs + Math.min(embeddedDurationMs, MAX_TEXT_CUE_DURATION_MS);
   }
   return startMs + DEFAULT_TEXT_CUE_DURATION_MS;
 }
@@ -1232,7 +1369,23 @@ function normalizeAssHeader(codecPrivate) {
   ) {
     return buildDefaultAssHeader();
   }
-  return header + "\n";
+  // Rebuilt Matroska events always use the canonical ASS column order.
+  // Preserve the source styles, resolution and other header sections.
+  var inEvents = false;
+  return (
+    header
+      .split("\n")
+      .map(function (line) {
+        if (/^\s*\[.*\]\s*$/.test(line)) {
+          inEvents = /^\s*\[Events\]\s*$/i.test(line);
+        }
+        if (inEvents && /^\s*Format\s*:/i.test(line)) {
+          return "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text";
+        }
+        return line;
+      })
+      .join("\n") + "\n"
+  );
 }
 
 function getAssDialogueText(track, frame) {
@@ -1273,20 +1426,12 @@ function buildAssDialogueLine(track, frame, nextFrame) {
   // comma-separated row, and treating its first fields as Style/Name/Margins
   // duplicates that prefix in the generated Dialogue line.
   var hasShortTiming = fields.length >= 9 && isAssTimestamp(fields[0]) && isAssTimestamp(fields[1]);
-  var hasPositionalShape =
-    isAssTextSubtitleTrack(track) &&
-    fields.length >= 9 &&
-    /^-?\d+$/.test(String(fields[0] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[1] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[4] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[5] || "").trim()) &&
-    /^-?\d+$/.test(String(fields[6] || "").trim()) &&
-    String(fields[7] || "").trim() === "";
+  var hasPositionalShape = isAssTextSubtitleTrack(track) && isMatroskaAssPacketShape(fields);
   var hasStructuredFields = hasShortTiming || hasPositionalShape;
   var assText = text.replace(/\r?\n/g, "\\N");
-  // Positional form carries the ASS Layer in fields[0]; short SSA has none,
-  // so default it to 0. Preserve a non-zero layer to keep stacking order.
-  var layer = hasPositionalShape ? String(fields[0] || "").trim() || "0" : "0";
+  // Matroska stores ReadOrder first, then Layer; ReadOrder is not a layer.
+  // SSA may leave Layer empty, which maps to the default layer 0.
+  var layer = hasPositionalShape ? String(fields[1] || "").trim() || "0" : "0";
   var style = hasStructuredFields ? String(fields[2] || "").trim() || "Default" : "Default";
   var name = hasStructuredFields ? String(fields[3] || "").trim() : "";
   var marginL = hasStructuredFields ? String(fields[4] || "").trim() || "0" : "0";
@@ -1609,13 +1754,52 @@ function formatVttTimestamp(timestampMs) {
   return formatTimestamp(timestampMs).replace(/:(\d{3})$/, ".$1");
 }
 
+// Plain-text VTT cannot render ASS drawing paths. Keep this sanitation local
+// to the VTT fallback: the reconstructed ASS body must retain every balanced
+// override so libass/ass.js can render the original styling.
+function sanitizePlainTextAssCue(text) {
+  var source = String(text || "");
+  var drawing = false;
+  var output = "";
+  var offset = 0;
+  var blocks = /\{([^}]*)\}/g;
+  var match;
+  while ((match = blocks.exec(source))) {
+    if (!drawing) output += source.slice(offset, match.index);
+    var block = match[1];
+    var depth = 0;
+    for (var index = 0; index < block.length; index += 1) {
+      var character = block[index];
+      if (character === "(") depth += 1;
+      else if (character === ")") depth = Math.max(0, depth - 1);
+      else if (character === "\\" && depth === 0) {
+        var tag = block.slice(index + 1);
+        var mode = /^p(-?\d+)(?=\\|\s|$)/.exec(tag);
+        if (mode) drawing = Number(mode[1]) > 0;
+        else if (tag[0] === "r") drawing = false;
+      }
+    }
+    offset = blocks.lastIndex;
+  }
+  if (!drawing) output += source.slice(offset);
+  return output
+    .replace(/\\[Nn]/g, "\n")
+    .replace(/\\h/g, " ")
+    .trim();
+}
+
 function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) {
   var cueBlocks = [];
   var outputBytes = Buffer.byteLength("WEBVTT\n\n", "utf8");
   var hasOverrides = false;
   var hasAdvancedOverrides = false;
   frames.forEach(function (frame, index) {
-    var text = normalizeTextSubtitlePayload(track, frame.payload);
+    var rawText = normalizeTextSubtitlePayload(track, frame.payload);
+    if (!rawText) return;
+    var assContext = isAssTextSubtitleTrack(track) || hasAssOverrideTags(rawText);
+    hasOverrides = hasOverrides || hasAssOverrideTags(rawText);
+    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(rawText);
+    var text = assContext ? sanitizePlainTextAssCue(rawText) : rawText;
     if (!text) return;
     var cueStartMs = Number(frame.timestampMs);
     var cueEndMs = getTextCueEndMs(frame, frames[index + 1]);
@@ -1636,8 +1820,6 @@ function buildTextSubtitleWindowPayload(track, frames, startMs, endMs, options) 
     }
     outputBytes += blockBytes;
     cueBlocks.push(block);
-    hasOverrides = hasOverrides || hasAssOverrideTags(text);
-    hasAdvancedOverrides = hasAdvancedOverrides || hasAdvancedAssOverrideTags(text);
   });
   var body = "WEBVTT\n\n" + (cueBlocks.length ? cueBlocks.join("\n\n") + "\n\n" : "");
   var includeAssBody =
@@ -1801,15 +1983,14 @@ async function buildWindow(mediaUrl, trackNumber, startSeconds, endSeconds, requ
 async function buildTextWindow(
   mediaUrl,
   trackNumber,
+  trackOrdinal,
   startSeconds,
   endSeconds,
   includeAssBody,
   requestContext
 ) {
   var metadata = await loadMetadata(mediaUrl);
-  var track = metadata.tracks.find(function (entry) {
-    return entry.number === trackNumber && isTextSubtitleTrack(entry);
-  });
+  var track = findTextSubtitleTrack(metadata, trackNumber, trackOrdinal);
   if (!track) {
     throw bitmapSubtitleError(
       "TRACK_NOT_FOUND",
@@ -1818,14 +1999,15 @@ async function buildTextWindow(
   }
   var startMs = Math.max(0, Math.floor(startSeconds * 1000));
   var endMs = Math.max(startMs + 1000, Math.floor(endSeconds * 1000));
-  var positions = selectClusterPositions(metadata, trackNumber, startMs, endMs);
-  var loadedFrames = await loadClusterFrames(mediaUrl, metadata, track, positions, requestContext);
+  var resolvedTrackNumber = track.number;
+  var cues = selectTextSubtitleCues(metadata, resolvedTrackNumber, startMs, endMs);
+  var loadedFrames = await loadCueFrames(mediaUrl, metadata, track, cues, requestContext);
   var frames = selectTextFramesInRange(loadedFrames, startMs, endMs);
   var payload = buildTextSubtitleWindowPayload(track, frames, startMs, endMs, {
     includeAssBody: includeAssBody
   });
   return Object.assign(payload, {
-    trackNumber: trackNumber,
+    trackNumber: resolvedTrackNumber,
     codecId: track.codecId || "",
     language: track.language || "",
     name: track.name || "",
@@ -1838,23 +2020,34 @@ async function buildTextWindow(
 async function getEmbeddedTextSubtitleWindow(options) {
   var mediaUrl = normalizeMediaUrl(options && options.url);
   var trackNumber = Math.trunc(Number(options && options.trackNumber));
+  var trackOrdinal = Math.trunc(Number(options && options.trackOrdinal));
   var startSeconds = Math.max(0, Number(options && options.startSeconds) || 0);
   var includeAssBody = Boolean(options && options.includeAssBody);
   var requestedEnd = Number(options && options.endSeconds);
   var endSeconds = Number.isFinite(requestedEnd)
     ? Math.min(startSeconds + 180, Math.max(startSeconds + 1, requestedEnd))
     : startSeconds + 120;
-  if (!Number.isFinite(trackNumber) || trackNumber <= 0) {
-    throw bitmapSubtitleError("INVALID_TRACK", "Embedded text subtitle track number is invalid");
+  if (
+    (!Number.isFinite(trackNumber) || trackNumber <= 0) &&
+    (!Number.isFinite(trackOrdinal) || trackOrdinal < 0)
+  ) {
+    throw bitmapSubtitleError(
+      "INVALID_TRACK",
+      "Embedded text subtitle track number or ordinal is invalid"
+    );
   }
   var normalizedWindow = normalizeWindowRange(startSeconds, endSeconds);
   var bucketStart = normalizedWindow.startSeconds;
   var bucketEnd = normalizedWindow.endSeconds;
-  var activeKey = mediaUrl + "::" + trackNumber;
+  var trackKey =
+    Number.isFinite(trackNumber) && trackNumber > 0
+      ? "number:" + trackNumber
+      : "ordinal:" + trackOrdinal;
+  var activeKey = mediaUrl + "::" + trackKey;
   var cacheKey =
     mediaUrl +
     "::" +
-    trackNumber +
+    trackKey +
     "::" +
     bucketStart +
     "::" +
@@ -1873,6 +2066,7 @@ async function getEmbeddedTextSubtitleWindow(options) {
   var request = buildTextWindow(
     mediaUrl,
     trackNumber,
+    trackOrdinal,
     bucketStart,
     bucketEnd,
     includeAssBody,
@@ -1995,6 +2189,8 @@ function clearBitmapSubtitleCaches() {
   windowRequests.clear();
   textWindowCache.clear();
   textWindowRequests.clear();
+  cuedFrameCache.clear();
+  cuedFrameCacheBytes = 0;
   clusterRangeRequests.clear();
   Array.from(activeTextWindowRequests.keys()).forEach(function (activeKey) {
     cancelActiveTextWindowRequest(activeKey);

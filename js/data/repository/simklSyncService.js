@@ -3,6 +3,7 @@ import { ProfileManager } from "../../core/profile/profileManager.js";
 import { SimklAnimeIdPreference, TraktSettingsStore } from "../local/traktSettingsStore.js";
 import { SimklAuthService } from "./simklAuthService.js";
 import { simklRequest } from "./simklAuthService.js";
+import { shouldMarkCompletedSeriesWatched } from "./simklCompletedSeries.js";
 
 const STORE_KEY = "simklSyncState";
 const SNAPSHOT_SCHEMA_VERSION = 3;
@@ -39,9 +40,18 @@ const STATUS_DEFINITIONS = [
 ];
 
 let refreshInFlight = null;
+const refreshStatusByProfile = new Map();
 
 function activeProfileId() {
   return String(ProfileManager.getActiveProfileId() || "1");
+}
+
+function setRefreshStatus(profileId, status) {
+  refreshStatusByProfile.set(String(profileId || "1"), status);
+}
+
+function snapshotHasLoadedProgress(snapshot) {
+  return Boolean(snapshot?.initialized && Number(snapshot?.lastSyncedAt || 0) > 0);
 }
 
 function emptySnapshot() {
@@ -103,10 +113,11 @@ function simklId(ids = {}) {
   return idValue(ids, "simkl") || idValue(ids, "simkl_id");
 }
 
-function canonicalContentId(media = {}, mediaType = "shows") {
+export function canonicalContentId(media = {}, mediaType = "shows") {
   const ids = media.ids || {};
   const preference = TraktSettingsStore.get().simklAnimeIdPreference;
-  if (mediaType === "anime") {
+  const hasAnimeIds = ["mal", "kitsu", "anidb"].some((key) => Boolean(idValue(ids, key)));
+  if (hasAnimeIds) {
     if (preference === SimklAnimeIdPreference.MAL) {
       if (idValue(ids, "mal")) return `mal:${idValue(ids, "mal")}`;
       if (idValue(ids, "kitsu")) return `kitsu:${idValue(ids, "kitsu")}`;
@@ -116,6 +127,9 @@ function canonicalContentId(media = {}, mediaType = "shows") {
       if (idValue(ids, "kitsu")) return `kitsu:${idValue(ids, "kitsu")}`;
       if (idValue(ids, "mal")) return `mal:${idValue(ids, "mal")}`;
       if (idValue(ids, "anidb")) return `anidb:${idValue(ids, "anidb")}`;
+    }
+    if (preference === SimklAnimeIdPreference.TVDB && idValue(ids, "tvdb")) {
+      return `tvdb:${idValue(ids, "tvdb")}`;
     }
   }
   if (idValue(ids, "imdb")) return idValue(ids, "imdb");
@@ -276,6 +290,30 @@ function statusDefinitionForEntry(entry) {
   return STATUS_DEFINITIONS.find((definition) => definition.status === entry?.status) || null;
 }
 
+// Mirrors Android SimklLibraryEntry.destructiveRemovalImpacts: removing a Simkl
+// entry clears watched history when it is in any status other than plan to
+// watch, or carries watch data, and clears a rating when a rating value or
+// rating timestamp is present.
+export function destructiveRemovalImpacts(entry) {
+  const impacts = [];
+  if (!entry) return impacts;
+  if (
+    entry.status !== "plantowatch" ||
+    entry.last_watched_at != null ||
+    entry.last_watched != null ||
+    Number(entry.watched_episodes_count) > 0 ||
+    (entry.seasons || []).some((season) =>
+      (season.episodes || []).some((episode) => episode.watched_at != null)
+    )
+  ) {
+    impacts.push("watched_history");
+  }
+  if (entry.user_rating != null || entry.user_rated_at != null) {
+    impacts.push("rating");
+  }
+  return impacts;
+}
+
 function toLibraryEntry(entry, snapshot) {
   const media = mediaForEntry(entry);
   const definition = statusDefinitionForEntry(entry);
@@ -286,6 +324,7 @@ function toLibraryEntry(entry, snapshot) {
   return {
     id: contentId,
     type,
+    mediaCategory: entry.mediaType === "anime" ? "anime" : null,
     name: String(media.title || contentId),
     poster: posterUrl(media),
     background: null,
@@ -319,7 +358,7 @@ function toLibraryEntry(entry, snapshot) {
   };
 }
 
-function aliasesForMedia(media = {}, mediaType = "shows") {
+export function aliasesForMedia(media = {}, mediaType = "shows") {
   const aliases = new Set();
   const canonical = canonicalContentId(media, mediaType);
   if (canonical) aliases.add(canonical.toLowerCase());
@@ -478,6 +517,74 @@ function historyMutationBody(item, fallbackEntry, includeWatchedAt) {
   };
 }
 
+function mutationMediaKey(media = {}) {
+  const ids = Object.entries(media.ids || {}).sort(([left], [right]) =>
+    String(left).localeCompare(String(right))
+  );
+  return ids.length
+    ? JSON.stringify(ids)
+    : `${String(media.title || "").toLowerCase()}::${String(media.year || "")}`;
+}
+
+function mergeSimklShow(target, source) {
+  const merged = { ...target, ...source };
+  const directEpisodes = new Map(
+    (target.episodes || []).map((episode) => [Number(episode.number), episode])
+  );
+  (source.episodes || []).forEach((episode) => {
+    directEpisodes.set(Number(episode.number), episode);
+  });
+  if (directEpisodes.size) {
+    merged.episodes = Array.from(directEpisodes.values()).sort(
+      (left, right) => left.number - right.number
+    );
+  }
+
+  const seasons = new Map(
+    (target.seasons || []).map((season) => [
+      Number(season.number),
+      { ...season, episodes: [...(season.episodes || [])] }
+    ])
+  );
+  (source.seasons || []).forEach((season) => {
+    const seasonNumber = Number(season.number);
+    const current = seasons.get(seasonNumber) || { number: seasonNumber, episodes: [] };
+    const episodes = new Map(
+      (current.episodes || []).map((episode) => [Number(episode.number), episode])
+    );
+    (season.episodes || []).forEach((episode) => {
+      episodes.set(Number(episode.number), episode);
+    });
+    current.episodes = Array.from(episodes.values()).sort(
+      (left, right) => left.number - right.number
+    );
+    seasons.set(seasonNumber, current);
+  });
+  if (seasons.size) {
+    merged.seasons = Array.from(seasons.values()).sort((left, right) => left.number - right.number);
+  }
+  return merged;
+}
+
+function mergeSimklHistoryBodies(bodies = []) {
+  const movies = new Map();
+  const shows = new Map();
+  bodies.forEach((body) => {
+    (body?.movies || []).forEach((movie) => {
+      const key = mutationMediaKey(movie);
+      movies.set(key, movies.has(key) ? { ...movies.get(key), ...movie } : movie);
+    });
+    (body?.shows || []).forEach((show) => {
+      const key = mutationMediaKey(show);
+      shows.set(key, shows.has(key) ? mergeSimklShow(shows.get(key), show) : show);
+    });
+  });
+  return {
+    movies: Array.from(movies.values()),
+    shows: Array.from(shows.values())
+  };
+}
+
 function progressFromPlayback(session, snapshot) {
   const media = session?.movie || session?.anime || session?.show;
   if (!media) return null;
@@ -554,6 +661,7 @@ function watchedProjection(snapshot) {
       return;
     }
     if (["hold", "dropped"].includes(entry.status)) return;
+    let hasEpisodeHistory = false;
     (entry.seasons || []).forEach((season) => {
       (season?.episodes || []).forEach((episode) => {
         if (!episode?.watched_at) return;
@@ -563,6 +671,7 @@ function watchedProjection(snapshot) {
         const seasonNumber = hasTvdbCoordinates ? mappedSeason : Number(season.number || 0);
         const episodeNumber = hasTvdbCoordinates ? mappedEpisode : Number(episode.number || 0);
         if (episodeNumber <= 0) return;
+        hasEpisodeHistory = true;
         const watchedAt = parseDate(episode.watched_at, snapshot.lastSyncedAt);
         const isSimklAbsoluteEpisode = entry.mediaType === "anime" && !hasTvdbCoordinates;
         const watched = {
@@ -590,6 +699,13 @@ function watchedProjection(snapshot) {
         });
       });
     });
+    if (shouldMarkCompletedSeriesWatched(entry.status, hasEpisodeHistory)) {
+      const lastWatchedAt = parseDate(entry.last_watched_at, NaN);
+      const watchedAt = Number.isFinite(lastWatchedAt)
+        ? lastWatchedAt
+        : parseDate(entry.added_to_watchlist_at, 0);
+      items.push({ ...base, watchedAt });
+    }
   });
   return { items, historyItems, watchedShowSeedItems };
 }
@@ -623,13 +739,25 @@ export const SimklSyncService = {
 
   getSnapshot,
 
+  hasLoadedRemoteProgress(profileId = activeProfileId()) {
+    const snapshot = getSnapshot(profileId);
+    const status = refreshStatusByProfile.get(String(profileId || "1"));
+    if (status === "error") {
+      return false;
+    }
+    return snapshotHasLoadedProgress(snapshot);
+  },
+
   isTrackedAsWatching(contentId, profileId) {
     return isTrackedAsWatching(getSnapshot(profileId), contentId);
   },
 
   async refresh({ force = false } = {}) {
-    if (!SimklAuthService.isAuthenticated()) return false;
     const profileId = activeProfileId();
+    if (!SimklAuthService.isAuthenticated()) {
+      setRefreshStatus(profileId, "error");
+      return false;
+    }
     const current = getSnapshot(profileId);
     const needsBootstrap = current.schemaVersion !== SNAPSHOT_SCHEMA_VERSION;
     if (
@@ -638,9 +766,11 @@ export const SimklSyncService = {
       current.lastCheckedAt &&
       Date.now() - current.lastCheckedAt < AUTOMATIC_REFRESH_INTERVAL_MS
     ) {
+      setRefreshStatus(profileId, snapshotHasLoadedProgress(current) ? "loaded" : "error");
       return false;
     }
     if (refreshInFlight?.profileId === profileId) return refreshInFlight.promise;
+    setRefreshStatus(profileId, "loading");
     const promise = (
       needsBootstrap || !current.initialized
         ? initialSync(profileId)
@@ -649,7 +779,14 @@ export const SimklSyncService = {
       .then((snapshot) => {
         if (activeProfileId() !== profileId) return false;
         saveSnapshot({ ...snapshot, schemaVersion: SNAPSHOT_SCHEMA_VERSION }, profileId);
+        setRefreshStatus(profileId, "loaded");
         return true;
+      })
+      .catch((error) => {
+        if (activeProfileId() === profileId) {
+          setRefreshStatus(profileId, "error");
+        }
+        throw error;
       })
       .finally(() => {
         if (refreshInFlight?.promise === promise) refreshInFlight = null;
@@ -659,7 +796,9 @@ export const SimklSyncService = {
   },
 
   clearCurrentProfile() {
-    clearSnapshot();
+    const profileId = activeProfileId();
+    clearSnapshot(profileId);
+    setRefreshStatus(profileId, "loaded");
   },
 
   async getLibraryTabs() {
@@ -708,14 +847,7 @@ export const SimklSyncService = {
       throw new Error("Completed is managed by watched history");
     }
     if (!destination) {
-      const hasHistory = Boolean(
-        entry &&
-        (entry.last_watched_at ||
-          entry.user_rating != null ||
-          (entry.seasons || []).some((season) =>
-            (season.episodes || []).some((episode) => episode.watched_at)
-          ))
-      );
+      const hasHistory = destructiveRemovalImpacts(entry).length > 0;
       if (hasHistory && !destructiveRemovalConfirmed) {
         const error = new Error(
           "Removing this Simkl status would also clear watched history or a rating"
@@ -746,12 +878,25 @@ export const SimklSyncService = {
   },
 
   async markWatched(item) {
+    return this.markWatchedBatch([item]);
+  },
+
+  async markWatchedBatch(items = []) {
+    const candidates = (Array.isArray(items) ? items : []).filter((item) => item?.contentId);
+    if (!candidates.length) {
+      return;
+    }
     const profileId = activeProfileId();
     const snapshot = getSnapshot(profileId);
-    const entry = findEntry(snapshot, item);
+    const body = mergeSimklHistoryBodies(
+      candidates.map((item) => historyMutationBody(item, findEntry(snapshot, item), true))
+    );
+    if (!body.movies.length && !body.shows.length) {
+      return;
+    }
     await simklRequest("/sync/history", {
       method: "POST",
-      body: historyMutationBody(item, entry, true),
+      body,
       profileId
     });
     snapshot.lastCheckedAt = 0;

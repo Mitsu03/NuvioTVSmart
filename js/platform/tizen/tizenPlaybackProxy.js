@@ -1,13 +1,9 @@
 import { TizenEngineFsService } from "./tizenEngineFsService.js";
 
 const NATIVE_AVPLAY_REQUEST_HEADERS = new Set(["cookie", "user-agent"]);
-const HOP_BY_HOP_HEADERS = new Set([
-  "connection",
-  "content-length",
-  "host",
-  "range",
-  "transfer-encoding"
-]);
+const HLS_BROWSER_RESTRICTED_HEADERS = new Set(["cookie", "user-agent"]);
+const BROWSER_HLS_ENGINES = new Set(["hls.js", "native-hls"]);
+const HOP_BY_HOP_HEADERS = new Set(["connection", "content-length", "host", "range", "transfer-encoding"]);
 
 function normalizeHeaderEntries(headers = {}) {
   if (!headers || typeof headers !== "object") {
@@ -17,10 +13,7 @@ function normalizeHeaderEntries(headers = {}) {
     .map(([key, value]) => [String(key || "").trim(), String(value ?? "").trim()])
     .filter(([key, value]) => key && value)
     .filter(([key]) => !HOP_BY_HOP_HEADERS.has(key.toLowerCase()))
-    .filter(
-      ([key, value]) =>
-        !key.includes("\r") && !key.includes("\n") && !value.includes("\r") && !value.includes("\n")
-    );
+    .filter(([key, value]) => !key.includes("\r") && !key.includes("\n") && !value.includes("\r") && !value.includes("\n"));
 }
 
 function parseHttpUrl(value = "") {
@@ -44,9 +37,7 @@ function isLocalProxyUrl(value = "") {
 }
 
 export function hasTizenUnsupportedPlaybackHeaders(headers = {}) {
-  return normalizeHeaderEntries(headers).some(
-    ([key]) => !NATIVE_AVPLAY_REQUEST_HEADERS.has(key.toLowerCase())
-  );
+  return normalizeHeaderEntries(headers).some(([key]) => !NATIVE_AVPLAY_REQUEST_HEADERS.has(key.toLowerCase()));
 }
 
 export function buildTizenPlaybackProxyUrl(baseUrl, sourceUrl, headers = {}) {
@@ -68,23 +59,31 @@ export function buildTizenPlaybackProxyUrl(baseUrl, sourceUrl, headers = {}) {
 }
 
 export const TizenPlaybackProxy = {
-  requiresProxy(sourceUrl = "", headers = {}) {
+  requiresProxy(sourceUrl = "", headers = {}, { playbackEngine = "" } = {}) {
+    const engine = String(playbackEngine || "")
+      .trim()
+      .toLowerCase();
+    // AVPlay can set Cookie and User-Agent itself. Browser HLS paths cannot,
+    // so keep those declared source headers on the EngineFS request instead.
+    const browserHlsNeedsRestrictedHeaders =
+      BROWSER_HLS_ENGINES.has(engine) &&
+      normalizeHeaderEntries(headers).some(([key]) => HLS_BROWSER_RESTRICTED_HEADERS.has(key.toLowerCase()));
     return Boolean(
       parseHttpUrl(sourceUrl) &&
       !isLocalProxyUrl(sourceUrl) &&
-      hasTizenUnsupportedPlaybackHeaders(headers)
+      (hasTizenUnsupportedPlaybackHeaders(headers) || browserHlsNeedsRestrictedHeaders)
     );
   },
 
-  async resolve(sourceUrl = "", headers = {}) {
+  async resolve(sourceUrl = "", headers = {}, { playbackEngine = "" } = {}) {
     const originalUrl = String(sourceUrl || "").trim();
-    if (!this.requiresProxy(originalUrl, headers)) {
+    if (!this.requiresProxy(originalUrl, headers, { playbackEngine })) {
       return { status: "not-required", url: originalUrl, proxied: false };
     }
 
     let service;
     try {
-      service = await TizenEngineFsService.ensureStarted();
+      service = await TizenEngineFsService.ensureStarted({ purpose: "playback-proxy" });
     } catch (error) {
       return {
         status: "unavailable",

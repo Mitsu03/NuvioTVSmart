@@ -16,6 +16,16 @@ const MANIFEST_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const MANIFEST_CACHE_MAX_ENTRIES = 128;
 const MANIFEST_CACHE_PERSIST_DELAY_MS = 250;
 
+function readBooleanFlag(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1";
+  }
+  return false;
+}
+
 class AddonRepository {
   constructor() {
     this.manifestCache = new Map();
@@ -142,6 +152,10 @@ class AddonRepository {
     return `${cleanPath}${query}`;
   }
 
+  normalizeUrl(url) {
+    return this.normalizeCinemetaUrl(this.canonicalizeUrl(url)).toLowerCase();
+  }
+
   buildManifestUrl(baseUrl) {
     const cleanBaseUrl = this.canonicalizeUrl(baseUrl);
     const queryStart = cleanBaseUrl.indexOf("?");
@@ -175,7 +189,36 @@ class AddonRepository {
 
   getActiveStorageProfileId(profileId = null) {
     const raw = String(profileId ?? ProfileManager.getActiveProfileId() ?? "1").trim();
-    return raw || "1";
+    if (!raw || raw === "1") {
+      return "1";
+    }
+
+    const storedProfiles = LocalStore.get(PROFILES_KEY, null);
+    const activeProfile = Array.isArray(storedProfiles)
+      ? storedProfiles.find((profile) => {
+          const id = String(profile?.id || profile?.profileIndex || "").trim();
+          return id === raw;
+        })
+      : null;
+    const usesPrimaryAddons = readBooleanFlag(
+      activeProfile?.usesPrimaryAddons ?? activeProfile?.uses_primary_addons
+    );
+    return usesPrimaryAddons ? "1" : raw;
+  }
+
+  canEdit(profileId = null) {
+    const raw = String(profileId ?? ProfileManager.getActiveProfileId() ?? "1").trim() || "1";
+    if (raw === "1") {
+      return true;
+    }
+    const storedProfiles = LocalStore.get(PROFILES_KEY, null);
+    const profile = Array.isArray(storedProfiles)
+      ? storedProfiles.find((entry) => {
+          const id = String(entry?.id || entry?.profileIndex || "").trim();
+          return id === raw;
+        })
+      : null;
+    return !readBooleanFlag(profile?.usesPrimaryAddons ?? profile?.uses_primary_addons);
   }
 
   getKnownStorageProfileIds() {
@@ -224,7 +267,16 @@ class AddonRepository {
         ...raw,
         profiles: Object.entries(raw.profiles || {}).reduce((accumulator, [profileId, value]) => {
           const normalizedProfileId = this.getActiveStorageProfileId(profileId);
-          accumulator[normalizedProfileId] = normalizeValue(this.cloneValue(value));
+          // If a legacy envelope contains both the primary profile and an
+          // inherited secondary copy, the primary value is authoritative.
+          // An inherited entry may still seed profile 1 when the primary key
+          // is absent, which keeps old installations recoverable.
+          if (
+            !Object.prototype.hasOwnProperty.call(accumulator, normalizedProfileId) ||
+            String(profileId) === normalizedProfileId
+          ) {
+            accumulator[normalizedProfileId] = normalizeValue(this.cloneValue(value));
+          }
           return accumulator;
         }, {})
       };
@@ -237,9 +289,10 @@ class AddonRepository {
     const envelope = this.createProfileScopedEnvelope();
     if (raw != null) {
       const normalizedLegacy = normalizeValue(this.cloneValue(raw));
-      this.getKnownStorageProfileIds().forEach((profileId) => {
-        envelope.profiles[profileId] = this.cloneValue(normalizedLegacy);
-      });
+      // Pre-profile addon state was global. Android assigns that legacy state
+      // to the primary profile; independent secondary profiles start from
+      // their own defaults, while inherited profiles still resolve to 1.
+      envelope.profiles["1"] = this.cloneValue(normalizedLegacy);
       LocalStore.set(key, envelope);
     }
     return envelope;
@@ -251,9 +304,9 @@ class AddonRepository {
       return envelope.profiles[normalizedProfileId];
     }
 
-    const seed = Object.prototype.hasOwnProperty.call(envelope.profiles, "1")
-      ? this.cloneValue(envelope.profiles["1"])
-      : this.cloneValue(defaultValue);
+    // Android gives an independent profile its own default state. Profiles
+    // inheriting the primary state already resolve to storage key "1" above.
+    const seed = this.cloneValue(defaultValue);
     envelope.profiles[normalizedProfileId] = normalizeValue(seed);
     LocalStore.set(key, envelope);
     return envelope.profiles[normalizedProfileId];
@@ -278,7 +331,17 @@ class AddonRepository {
     if (!Array.isArray(value)) {
       return [];
     }
-    return Array.from(new Set(value.map((url) => this.canonicalizeUrl(url)).filter(Boolean)));
+    const seen = new Set();
+    return value
+      .map((url) => this.normalizeCinemetaUrl(this.canonicalizeUrl(url)))
+      .filter((url) => {
+        const key = this.normalizeUrl(url);
+        if (!key || seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
   }
 
   normalizeDisplayNameOverrides(value) {
@@ -286,9 +349,14 @@ class AddonRepository {
       return {};
     }
     return Object.entries(value).reduce((accumulator, [url, name]) => {
-      const cleanUrl = this.canonicalizeUrl(url);
+      const cleanUrl = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
       const cleanName = String(name || "").trim();
       if (cleanUrl && cleanName) {
+        Object.keys(accumulator)
+          .filter((key) => this.normalizeUrl(key) === this.normalizeUrl(cleanUrl))
+          .forEach((key) => {
+            delete accumulator[key];
+          });
         accumulator[cleanUrl] = cleanName;
       }
       return accumulator;
@@ -302,7 +370,12 @@ class AddonRepository {
     return Object.entries(value).reduce((accumulator, [url, enabled]) => {
       const cleanUrl = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
       if (cleanUrl) {
-        accumulator[cleanUrl] = enabled !== false;
+        Object.keys(accumulator)
+          .filter((key) => this.normalizeUrl(key) === this.normalizeUrl(cleanUrl))
+          .forEach((key) => {
+            delete accumulator[key];
+          });
+        accumulator[cleanUrl] = enabled == null ? true : readBooleanFlag(enabled);
       }
       return accumulator;
     }, {});
@@ -326,7 +399,22 @@ class AddonRepository {
 
   isAddonEnabled(url) {
     const cleanUrl = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
-    return cleanUrl ? this.getAddonEnabledStates()[cleanUrl] !== false : false;
+    return cleanUrl
+      ? this.getAddonMapValue(this.getAddonEnabledStates(), cleanUrl) !== false
+      : false;
+  }
+
+  getAddonMapValue(map, url) {
+    const cleanUrl = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
+    if (!cleanUrl || !map || typeof map !== "object") {
+      return undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(map, cleanUrl)) {
+      return map[cleanUrl];
+    }
+    const identity = this.normalizeUrl(cleanUrl);
+    const matchingEntry = Object.entries(map).find(([key]) => this.normalizeUrl(key) === identity);
+    return matchingEntry?.[1];
   }
 
   setAddonEnabledStates(entries = [], options = {}) {
@@ -338,7 +426,14 @@ class AddonRepository {
         this.canonicalizeUrl(entry?.url || entry?.baseUrl || entry?.base_url || "")
       );
       if (cleanUrl) {
-        next[cleanUrl] = entry?.enabled !== false;
+        Object.keys(next)
+          .filter(
+            (key) => key !== cleanUrl && this.normalizeUrl(key) === this.normalizeUrl(cleanUrl)
+          )
+          .forEach((key) => {
+            delete next[key];
+          });
+        next[cleanUrl] = entry?.enabled == null ? true : readBooleanFlag(entry.enabled);
       }
     });
     const changed = JSON.stringify(this.getAddonEnabledStates()) !== JSON.stringify(next);
@@ -362,8 +457,10 @@ class AddonRepository {
   }
 
   getAddonDisplayNameOverride(url) {
-    const cleanUrl = this.canonicalizeUrl(url);
-    return cleanUrl ? this.getAddonDisplayNameOverrides()[cleanUrl] || "" : "";
+    const cleanUrl = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
+    return cleanUrl
+      ? this.getAddonMapValue(this.getAddonDisplayNameOverrides(), cleanUrl) || ""
+      : "";
   }
 
   setAddonDisplayNameOverrides(entries = [], options = {}) {
@@ -371,15 +468,28 @@ class AddonRepository {
     const current = replace ? {} : this.getAddonDisplayNameOverrides();
     const next = { ...current };
     (entries || []).forEach((entry) => {
-      const cleanUrl = this.canonicalizeUrl(entry?.url || entry?.baseUrl || entry?.base_url || "");
+      const cleanUrl = this.normalizeCinemetaUrl(
+        this.canonicalizeUrl(entry?.url || entry?.baseUrl || entry?.base_url || "")
+      );
       if (!cleanUrl) {
         return;
       }
       const displayName = String(entry?.name || "").trim();
       if (displayName) {
+        Object.keys(next)
+          .filter(
+            (key) => key !== cleanUrl && this.normalizeUrl(key) === this.normalizeUrl(cleanUrl)
+          )
+          .forEach((key) => {
+            delete next[key];
+          });
         next[cleanUrl] = displayName;
       } else if (replace) {
-        delete next[cleanUrl];
+        Object.keys(next)
+          .filter((key) => this.normalizeUrl(key) === this.normalizeUrl(cleanUrl))
+          .forEach((key) => {
+            delete next[key];
+          });
       }
     });
     const changed = JSON.stringify(this.getAddonDisplayNameOverrides()) !== JSON.stringify(next);
@@ -536,11 +646,7 @@ class AddonRepository {
     const includeDisabled = Boolean(options?.includeDisabled);
     const allUrls = this.getInstalledAddonUrls();
     const enabledStates = this.getAddonEnabledStates();
-    const urls = includeDisabled
-      ? allUrls
-      : allUrls.filter(
-          (url) => enabledStates[this.normalizeCinemetaUrl(this.canonicalizeUrl(url))] !== false
-        );
+    const urls = includeDisabled ? allUrls : allUrls.filter((url) => this.isAddonEnabled(url));
     const cacheKey = JSON.stringify({
       profileId: this.getActiveStorageProfileId(),
       urls,
@@ -628,13 +734,16 @@ class AddonRepository {
   }
 
   async addAddon(url) {
+    if (!this.canEdit()) {
+      return false;
+    }
     const clean = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
     if (!clean) {
       return;
     }
 
     const current = this.getInstalledAddonUrls();
-    if (current.includes(clean)) {
+    if (current.some((value) => this.normalizeUrl(value) === this.normalizeUrl(clean))) {
       return false;
     }
 
@@ -650,9 +759,14 @@ class AddonRepository {
   }
 
   async removeAddon(url) {
+    if (!this.canEdit()) {
+      return false;
+    }
     const clean = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
     const current = this.getInstalledAddonUrls();
-    const next = current.filter((value) => this.canonicalizeUrl(value) !== clean);
+    const cleanKey = this.normalizeUrl(clean);
+    const removedUrls = current.filter((value) => this.normalizeUrl(value) === cleanKey);
+    const next = current.filter((value) => this.normalizeUrl(value) !== cleanKey);
     if (next.length === current.length) {
       return false;
     }
@@ -661,15 +775,20 @@ class AddonRepository {
       (value) => this.normalizeAddonUrlList(value),
       next
     );
-    const nextEnabledStates = this.getAddonEnabledStates();
-    delete nextEnabledStates[clean];
+    const nextEnabledStates = Object.fromEntries(
+      Object.entries(this.getAddonEnabledStates()).filter(
+        ([key]) => this.normalizeUrl(key) !== cleanKey
+      )
+    );
     this.writeProfileScopedValue(
       ADDON_ENABLED_STATES_KEY,
       (value) => this.normalizeAddonEnabledStates(value),
       nextEnabledStates
     );
-    this.deleteManifestCacheEntry(clean);
-    this.manifestErrorCache.delete(clean);
+    removedUrls.forEach((removedUrl) => {
+      this.deleteManifestCacheEntry(removedUrl);
+      this.manifestErrorCache.delete(this.canonicalizeUrl(removedUrl));
+    });
     this.invalidateInstalledAddonsCache();
     this.notifyAddonsChanged("remove");
     return true;
@@ -692,14 +811,15 @@ class AddonRepository {
   }
 
   async setAddonOrder(urls, options = {}) {
+    if (options?.allowReadOnly !== true && !this.canEdit()) {
+      return false;
+    }
     const silent = Boolean(options?.silent);
-    const normalized = (urls || [])
-      .map((url) => this.normalizeCinemetaUrl(this.canonicalizeUrl(url)))
-      .filter(Boolean);
+    const normalized = this.normalizeAddonUrlList(urls || []);
     const current = this.getInstalledAddonUrls();
     const currentEnabledStates = this.getAddonEnabledStates();
     const nextEnabledStates = normalized.reduce((states, url) => {
-      states[url] = currentEnabledStates[url] !== false;
+      states[url] = this.getAddonMapValue(currentEnabledStates, url) !== false;
       return states;
     }, {});
     const changed = JSON.stringify(current) !== JSON.stringify(normalized);
@@ -718,9 +838,9 @@ class AddonRepository {
       );
     }
     if (changed || enabledStatesChanged) {
-      const normalizedSet = new Set(normalized);
+      const normalizedSet = new Set(normalized.map((url) => this.normalizeUrl(url)));
       current
-        .filter((url) => !normalizedSet.has(url))
+        .filter((url) => !normalizedSet.has(this.normalizeUrl(url)))
         .forEach((url) => {
           this.deleteManifestCacheEntry(url);
           this.manifestErrorCache.delete(url);
@@ -806,7 +926,12 @@ class AddonRepository {
       id: catalog.id,
       name: catalog.name || catalog.id,
       apiType: (catalog.type || "").trim(),
-      extra: this.mapCatalogExtra(catalog)
+      extra: this.mapCatalogExtra(catalog),
+      pageSize: Number.isFinite(Number(catalog.pageSize)) ? Number(catalog.pageSize) : null,
+      showInHome: catalog.showInHome === true,
+      hasExplicitShowInHome: catalog.showInHome !== null && catalog.showInHome !== undefined,
+      extraSupported: Array.isArray(catalog.extraSupported) ? [...catalog.extraSupported] : [],
+      extraRequired: Array.isArray(catalog.extraRequired) ? [...catalog.extraRequired] : []
     }));
 
     return {
@@ -826,22 +951,44 @@ class AddonRepository {
   }
 
   mapCatalogExtra(catalog = {}) {
-    if (Array.isArray(catalog.extra)) {
-      return catalog.extra.map((entry) => ({
-        name: entry.name,
-        isRequired: Boolean(entry.isRequired),
-        options: Array.isArray(entry.options) ? entry.options : null
-      }));
-    }
-    // Legacy manifest format: extraSupported/extraRequired as plain name arrays.
-    const required = Array.isArray(catalog.extraRequired) ? catalog.extraRequired : [];
-    const supported = Array.isArray(catalog.extraSupported) ? catalog.extraSupported : [];
-    const names = supported.concat(required.filter((name) => supported.indexOf(name) === -1));
-    return names.map((name) => ({
-      name: String(name),
-      isRequired: required.indexOf(name) !== -1,
-      options: null
-    }));
+    const extras = [];
+    const isManifestBoolean = (value) =>
+      value === true ||
+      (typeof value === "string" && value.trim().toLowerCase() === "true") ||
+      (typeof value === "number" && value !== 0);
+    const addExtra = (name, isRequired = false, options = null) => {
+      const normalizedName = String(name || "").trim();
+      if (!normalizedName) {
+        return;
+      }
+      const existing = extras.find(
+        (entry) => entry.name.toLowerCase() === normalizedName.toLowerCase()
+      );
+      if (existing) {
+        existing.isRequired = existing.isRequired || isManifestBoolean(isRequired);
+        if (!existing.options && Array.isArray(options)) {
+          existing.options = options;
+        }
+        return;
+      }
+      extras.push({
+        // Android normalizes full-form extra names before exposing the manifest
+        // to the UI; keep the same canonical representation here.
+        name: normalizedName.toLowerCase(),
+        isRequired: isManifestBoolean(isRequired),
+        options: Array.isArray(options) ? options : null
+      });
+    };
+
+    (Array.isArray(catalog.extra) ? catalog.extra : []).forEach((entry) => {
+      const name = typeof entry === "string" ? entry : entry?.name;
+      addExtra(name, entry?.isRequired, entry?.options);
+    });
+
+    // Keep legacy extraSupported/extraRequired separate. Android checks those
+    // arrays through supportsExtra(), while required-search detection only
+    // applies to the full-form `extra` declaration.
+    return extras;
   }
 
   parseResources(resources, defaultTypes) {

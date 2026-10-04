@@ -1,6 +1,9 @@
 import { createProfileScopedStore } from "./profileScopedStore.js";
 import { LocalStore } from "../../core/storage/localStore.js";
-import { normalizeHomeImdbRatingsVisibility } from "../../core/util/imdbRatingVisibility.js";
+import {
+  normalizeDetailImdbRatingsVisibility,
+  normalizeHomeImdbRatingsVisibility
+} from "../../core/util/imdbRatingVisibility.js";
 
 const KEY = "layoutPreferences";
 
@@ -48,7 +51,8 @@ const DEFAULTS = {
   showUnairedNextUp: true,
   nextUpFromFurthestEpisode: true,
   continueWatchingSortMode: "default",
-  homeImdbRatingsVisibility: "SHOW_ALL"
+  homeImdbRatingsVisibility: "SHOW_ALL",
+  detailImdbRatingsVisibility: "SHOW_ALL"
 };
 
 function normalizeContinueWatchingSortMode(value) {
@@ -151,6 +155,9 @@ function normalizeLayoutPreferences(value = {}) {
     nextUpFromFurthestEpisode: merged.nextUpFromFurthestEpisode !== false,
     continueWatchingSortMode: normalizeContinueWatchingSortMode(merged.continueWatchingSortMode),
     homeImdbRatingsVisibility: normalizeHomeImdbRatingsVisibility(merged.homeImdbRatingsVisibility),
+    detailImdbRatingsVisibility: normalizeDetailImdbRatingsVisibility(
+      merged.detailImdbRatingsVisibility
+    ),
     collapseSidebar: modernSidebar ? false : Boolean(merged.collapseSidebar),
     modernSidebar,
     modernSidebarBlur: modernSidebar
@@ -175,7 +182,14 @@ function applyCardDepthPresentation(settings) {
     settings.cardDepthEpisodeCardsEnabled !== false ? "true" : "false";
   root.dataset.cardDepthCast = settings.cardDepthCastEnabled !== false ? "true" : "false";
   root.dataset.cardDepthTrailers = settings.cardDepthTrailersEnabled !== false ? "true" : "false";
-  root.style.setProperty("--card-depth-edge", String(settings.cardDepthEdgeStrength / 100));
+  const edgeStrength = settings.cardDepthEdgeStrength / 100;
+  const edgeCoverage = settings.cardDepthEdgeCoverage / 100;
+  root.style.setProperty("--card-depth-edge", String(edgeStrength));
+  root.style.setProperty(
+    "--card-depth-edge-side",
+    String(edgeStrength * (0.33 + 0.67 * edgeCoverage))
+  );
+  root.style.setProperty("--card-depth-edge-bottom", String(edgeStrength * edgeCoverage));
   root.style.setProperty("--card-depth-sheen", String(settings.cardDepthSheenStrength / 100));
   root.style.setProperty("--card-depth-coverage", String(settings.cardDepthEdgeCoverage / 100));
   root.style.setProperty(

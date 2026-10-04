@@ -4,11 +4,11 @@
   "services": [
     {
       "name": "space.nuvio.webos.service",
-      "description": "Boots the local media runtime and exposes health checks",
+      "description": "Starts the local media runtime on demand and exposes health checks",
       "commands": [
         {
           "name": "ping",
-          "description": "Boot the local runtime and report service health",
+          "description": "Start the local runtime on demand and report service health",
           "public": true
         },
         {
@@ -42,6 +42,16 @@
           "public": true
         },
         {
+          "name": "playbackServiceKeepAlive",
+          "description": "Keep the webOS companion service alive during playback",
+          "public": true
+        },
+        {
+          "name": "playbackServiceKeepAliveStop",
+          "description": "Stop a playback service keep-alive subscription",
+          "public": true
+        },
+        {
           "name": "torrentCreate",
           "description": "Create an EngineFS torrent stream on the local media runtime",
           "public": true
@@ -69,6 +79,16 @@
         {
           "name": "enginefsKeepAliveStop",
           "description": "Stop an active EngineFS runtime keep-alive subscription",
+          "public": true
+        },
+        {
+          "name": "mediaPlaybackKeepAlive",
+          "description": "Keep the local media runtime active while webOS proxy playback is using it",
+          "public": true
+        },
+        {
+          "name": "mediaPlaybackKeepAliveStop",
+          "description": "Stop an active webOS proxy playback keep-alive subscription",
           "public": true
         },
         {

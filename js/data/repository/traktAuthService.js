@@ -4,12 +4,52 @@ import {
   TRAKT_CLIENT_SECRET,
   TRAKT_REDIRECT_URI
 } from "../../config.js";
+import { AuthManager } from "../../core/auth/authManager.js";
+import { trackSessionRequest } from "../../core/auth/sessionLifecycle.js";
 import { TraktAuthStore } from "../local/traktAuthStore.js";
 import { detailWatchedEnrichmentService } from "./detailWatchedEnrichmentService.js";
 
+import { createTraktAuthServiceMethods01 } from "./traktAuthServiceMethods-01-get-current-auth-state.js";
+
+export {
+  TRAKT_API_URL,
+  TRAKT_CLIENT_ID,
+  TRAKT_CLIENT_SECRET,
+  TRAKT_REDIRECT_URI,
+  AuthManager,
+  trackSessionRequest,
+  TraktAuthStore,
+  detailWatchedEnrichmentService,
+  API_VERSION,
+  DEFAULT_API_URL,
+  REFRESH_LEEWAY_SECONDS,
+  WATCHED_MAX_PAGES,
+  WATCHED_MOVIES_PAGE_LIMIT,
+  WATCHED_SHOWS_PAGE_LIMIT,
+  apiBaseUrl,
+  hasRequiredCredentials,
+  normalizeAuthErrorMessage,
+  createAbortError,
+  throwIfAborted,
+  sleep,
+  fetchWatchedPages,
+  readResponseBody,
+  isTokenExpiredOrExpiring,
+  fetchUserSettings,
+  normalizeHistoryItem,
+  normalizeWatchlistItem,
+  normalizePlaybackItem,
+  normalizeWatchedShowItem,
+  normalizeWatchedProgress,
+  normalizeWatchedMovieItem
+};
 const API_VERSION = "2";
 const DEFAULT_API_URL = "https://api.trakt.tv";
 const REFRESH_LEEWAY_SECONDS = 60;
+const WATCHED_MAX_PAGES = 1000;
+const WATCHED_MOVIES_PAGE_LIMIT = 250;
+// Trakt caps /sync/watched/shows?extended=progress at 100 items per page.
+const WATCHED_SHOWS_PAGE_LIMIT = 100;
 
 function apiBaseUrl() {
   return String(TRAKT_API_URL || DEFAULT_API_URL).replace(/\/+$/, "");
@@ -26,6 +66,76 @@ function normalizeAuthErrorMessage(payload, fallback) {
   return fallback;
 }
 
+function createAbortError() {
+  const error = new Error("Trakt request aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function sleep(ms, signal = null) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      reject(createAbortError());
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    timer = setTimeout(
+      () => {
+        signal?.removeEventListener?.("abort", onAbort);
+        resolve();
+      },
+      Math.max(0, Number(ms) || 0)
+    );
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
+async function fetchWatchedPages({ token, path, pageLimit, normalize, label }) {
+  const items = [];
+  let page = 1;
+
+  while (page <= WATCHED_MAX_PAGES) {
+    const separator = path.includes("?") ? "&" : "?";
+    const { response, payload } = await requestJson(
+      `${path}${separator}page=${page}&limit=${pageLimit}`,
+      { authorization: `Bearer ${token}` }
+    );
+    if (!response.ok || !Array.isArray(payload)) {
+      const error = new Error(`Trakt ${label} lookup failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
+
+    items.push(...payload.map(normalize).filter(Boolean));
+    if (payload.length === 0) {
+      break;
+    }
+
+    const pageCount = Number(response.headers.get("X-Pagination-Page-Count") || 0);
+    if (Number.isFinite(pageCount) && pageCount > 0 && page >= pageCount) {
+      break;
+    }
+    if (payload.length < pageLimit) {
+      break;
+    }
+    page += 1;
+  }
+
+  if (page > WATCHED_MAX_PAGES) {
+    throw new Error(`Trakt ${label} lookup exceeded the pagination safety limit`);
+  }
+  return items;
+}
+
 async function readResponseBody(response) {
   const text = await response.text();
   if (!text) {
@@ -38,26 +148,41 @@ async function readResponseBody(response) {
   }
 }
 
-export async function requestJson(
+export function requestJson(
   path,
-  { method = "GET", body = null, authorization = null, clientId = TRAKT_CLIENT_ID } = {}
+  {
+    method = "GET",
+    body = null,
+    authorization = null,
+    clientId = TRAKT_CLIENT_ID,
+    signal = null
+  } = {}
 ) {
-  const headers = {
-    "Content-Type": "application/json",
-    "trakt-api-version": API_VERSION,
-    "trakt-api-key": clientId
-  };
-  if (authorization) {
-    headers.Authorization = authorization;
-  }
+  const requestSignal = signal || AuthManager.getSessionSignal?.() || null;
+  return trackSessionRequest(
+    (async () => {
+      throwIfAborted(requestSignal);
+      const headers = {
+        "Content-Type": "application/json",
+        "trakt-api-version": API_VERSION,
+        "trakt-api-key": clientId
+      };
+      if (authorization) {
+        headers.Authorization = authorization;
+      }
 
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    method,
-    headers,
-    body: body == null ? undefined : JSON.stringify(body)
-  });
-  const payload = await readResponseBody(response);
-  return { response, payload };
+      const response = await fetch(`${apiBaseUrl()}${path}`, {
+        method,
+        headers,
+        body: body == null ? undefined : JSON.stringify(body),
+        ...(requestSignal ? { signal: requestSignal } : {})
+      });
+      throwIfAborted(requestSignal);
+      const payload = await readResponseBody(response);
+      throwIfAborted(requestSignal);
+      return { response, payload };
+    })()
+  );
 }
 
 function isTokenExpiredOrExpiring(state) {
@@ -90,313 +215,8 @@ async function fetchUserSettings() {
 
 export const TraktAuthService = {
   hasRequiredCredentials,
-
-  getCurrentAuthState() {
-    return TraktAuthStore.get();
-  },
-
-  isAuthenticated() {
-    return TraktAuthStore.isAuthenticated();
-  },
-
-  async startDeviceAuth() {
-    if (!hasRequiredCredentials()) {
-      throw new Error("Missing TRAKT credentials");
-    }
-
-    const current = TraktAuthStore.get();
-    if (current.deviceCode && current.expiresAt && Date.now() < Number(current.expiresAt)) {
-      return current;
-    }
-
-    let { response, payload } = await requestJson("/oauth/device/code", {
-      method: "POST",
-      body: { client_id: TRAKT_CLIENT_ID }
-    });
-
-    if (response.status === 429) {
-      const retryAfterSeconds = Number(response.headers.get("Retry-After") || 0);
-      if (retryAfterSeconds >= 1 && retryAfterSeconds <= 10) {
-        await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
-        ({ response, payload } = await requestJson("/oauth/device/code", {
-          method: "POST",
-          body: { client_id: TRAKT_CLIENT_ID }
-        }));
-      }
-    }
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        const retryAfter = Number(response.headers.get("Retry-After") || 300);
-        const minutes = Math.ceil(retryAfter / 60);
-        throw new Error(`Trakt is rate limiting requests. Try again in ~${minutes} min`);
-      }
-      throw new Error(
-        normalizeAuthErrorMessage(payload, `Failed to start Trakt auth (${response.status})`)
-      );
-    }
-
-    return TraktAuthStore.saveDeviceFlow(payload);
-  },
-
-  async pollDeviceToken() {
-    if (!hasRequiredCredentials()) {
-      return { type: "failed", message: "Missing TRAKT credentials" };
-    }
-    const state = TraktAuthStore.get();
-    if (!state.deviceCode) {
-      return { type: "failed", message: "No active Trakt device code" };
-    }
-    if (state.expiresAt && Date.now() >= Number(state.expiresAt)) {
-      TraktAuthStore.clearDeviceFlow();
-      return { type: "expired" };
-    }
-
-    const { response, payload } = await requestJson("/oauth/device/token", {
-      method: "POST",
-      body: {
-        code: state.deviceCode,
-        client_id: TRAKT_CLIENT_ID,
-        client_secret: TRAKT_CLIENT_SECRET
-      }
-    });
-
-    if (response.ok && payload) {
-      TraktAuthStore.saveToken(payload);
-      const username = await fetchUserSettings();
-      return { type: "approved", username };
-    }
-
-    if (response.status === 400) {
-      return { type: "pending" };
-    }
-    if (response.status === 409) {
-      TraktAuthStore.clearDeviceFlow();
-      return { type: "already_used" };
-    }
-    if (response.status === 410) {
-      TraktAuthStore.clearDeviceFlow();
-      return { type: "expired" };
-    }
-    if (response.status === 418) {
-      TraktAuthStore.clearDeviceFlow();
-      return { type: "denied" };
-    }
-    if (response.status === 429) {
-      const interval = Math.min(60, Math.max(5, Number(state.pollInterval || 5) + 5));
-      TraktAuthStore.updatePollInterval(interval);
-      return { type: "slow_down", pollIntervalSeconds: interval };
-    }
-    return {
-      type: "failed",
-      message: normalizeAuthErrorMessage(payload, `Token polling failed (${response.status})`)
-    };
-  },
-
-  async refreshTokenIfNeeded(force = false) {
-    if (!hasRequiredCredentials()) {
-      return false;
-    }
-    const state = TraktAuthStore.get();
-    if (!state.refreshToken) {
-      return false;
-    }
-    if (!force && !isTokenExpiredOrExpiring(state)) {
-      return true;
-    }
-
-    const { response, payload } = await requestJson("/oauth/token", {
-      method: "POST",
-      body: {
-        refresh_token: state.refreshToken,
-        client_id: TRAKT_CLIENT_ID,
-        client_secret: TRAKT_CLIENT_SECRET,
-        redirect_uri: TRAKT_REDIRECT_URI || "urn:ietf:wg:oauth:2.0:oob",
-        grant_type: "refresh_token"
-      }
-    });
-
-    if (!response.ok || !payload) {
-      if (response.status === 400 || response.status === 401 || response.status === 403) {
-        TraktAuthStore.clearAuth();
-      }
-      return false;
-    }
-    TraktAuthStore.saveToken(payload);
-    await fetchUserSettings();
-    return true;
-  },
-
-  async getValidAccessToken() {
-    const state = TraktAuthStore.get();
-    if (!state.accessToken) {
-      return null;
-    }
-    if (isTokenExpiredOrExpiring(state)) {
-      const refreshed = await this.refreshTokenIfNeeded(true);
-      if (!refreshed) {
-        return null;
-      }
-      return TraktAuthStore.get().accessToken;
-    }
-    return state.accessToken;
-  },
-
-  async disconnect() {
-    const state = TraktAuthStore.get();
-    if (hasRequiredCredentials() && state.accessToken) {
-      try {
-        await requestJson("/oauth/revoke", {
-          method: "POST",
-          body: {
-            token: state.accessToken,
-            client_id: TRAKT_CLIENT_ID,
-            client_secret: TRAKT_CLIENT_SECRET
-          }
-        });
-      } catch (error) {
-        console.warn("Trakt revoke failed", error);
-      }
-    }
-    detailWatchedEnrichmentService.invalidateAllCache();
-    TraktAuthStore.clearAuth();
-  },
-
-  fetchUserSettings,
-
-  async fetchStats(forceRefresh = false) {
-    const state = TraktAuthStore.get();
-    const username = state.userSlug || state.username;
-    if (!username) {
-      await fetchUserSettings();
-    }
-    const nextState = TraktAuthStore.get();
-    const userId = nextState.userSlug || nextState.username || "me";
-    const token = await this.getValidAccessToken();
-    if (!token) {
-      return null;
-    }
-    const cacheKey = `traktCachedStats:${userId}`;
-    const cached = forceRefresh ? null : JSON.parse(localStorage.getItem(cacheKey) || "null");
-    if (cached && Date.now() - Number(cached.cachedAt || 0) < 60 * 60 * 1000) {
-      return cached.stats || null;
-    }
-    const { response, payload } = await requestJson(`/users/${encodeURIComponent(userId)}/stats`, {
-      authorization: `Bearer ${token}`
-    });
-    if (!response.ok || !payload) {
-      return null;
-    }
-    const stats = {
-      moviesWatched: Number(payload.movies?.watched || 0),
-      showsWatched: Number(payload.shows?.watched || 0),
-      episodesWatched: Number(payload.episodes?.watched || 0),
-      totalWatchedHours: Math.round(
-        Number(payload.movies?.minutes || 0) / 60 + Number(payload.episodes?.minutes || 0) / 60
-      )
-    };
-    localStorage.setItem(cacheKey, JSON.stringify({ cachedAt: Date.now(), stats }));
-    return stats;
-  },
-
-  async fetchWatchHistory({ limit = 100 } = {}) {
-    const token = await this.getValidAccessToken();
-    if (!token) return [];
-
-    const allItems = [];
-    let page = 1;
-    const perPage = Math.min(limit, 100);
-
-    while (allItems.length < limit) {
-      const { response, payload } = await requestJson(
-        `/sync/history?limit=${perPage}&page=${page}`,
-        { authorization: `Bearer ${token}` }
-      );
-      if (!response.ok || !Array.isArray(payload)) break;
-
-      allItems.push(...payload.map(normalizeHistoryItem).filter(Boolean));
-      if (payload.length < perPage) break;
-      page++;
-    }
-
-    return allItems.slice(0, limit);
-  },
-
-  async fetchWatchlist({ limit = 100 } = {}) {
-    const token = await this.getValidAccessToken();
-    if (!token) return [];
-
-    const allItems = [];
-    let page = 1;
-    const perPage = Math.min(limit, 100);
-
-    while (allItems.length < limit) {
-      const { response, payload } = await requestJson(
-        `/sync/watchlist?limit=${perPage}&page=${page}`,
-        { authorization: `Bearer ${token}` }
-      );
-      if (!response.ok || !Array.isArray(payload)) break;
-
-      allItems.push(...payload.map(normalizeWatchlistItem).filter(Boolean));
-      if (payload.length < perPage) break;
-      page++;
-    }
-
-    return allItems.slice(0, limit);
-  },
-
-  async fetchPlaybackState({ limit = 50 } = {}) {
-    const token = await this.getValidAccessToken();
-    if (!token) return [];
-
-    const { response, payload } = await requestJson(`/sync/playback?limit=${limit}`, {
-      authorization: `Bearer ${token}`
-    });
-    if (!response.ok || !Array.isArray(payload)) return [];
-
-    return payload.map(normalizePlaybackItem).filter(Boolean).slice(0, limit);
-  },
-
-  async fetchWatchedShows() {
-    const token = await this.getValidAccessToken();
-    if (!token) return [];
-
-    const { response, payload } = await requestJson("/sync/watched/shows", {
-      authorization: `Bearer ${token}`
-    });
-    if (!response.ok || !Array.isArray(payload)) return [];
-
-    return payload.map(normalizeWatchedShowItem).filter(Boolean);
-  },
-
-  async fetchWatchedMovies() {
-    const token = await this.getValidAccessToken();
-    if (!token) return [];
-
-    const state = TraktAuthStore.get();
-    const userId = state.userSlug || state.username || "me";
-
-    const { response, payload } = await requestJson(
-      `/users/${encodeURIComponent(userId)}/watched/movies?extended=noseasons`,
-      { authorization: `Bearer ${token}` }
-    );
-    if (!response.ok || !Array.isArray(payload)) return [];
-
-    return payload.map(normalizeWatchedMovieItem).filter(Boolean);
-  },
-
-  async fetchWatchedProgress(showTraktId) {
-    const token = await this.getValidAccessToken();
-    if (!token) return null;
-
-    const { response, payload } = await requestJson(
-      `/shows/${encodeURIComponent(showTraktId)}/progress/watched`,
-      { authorization: `Bearer ${token}` }
-    );
-    if (!response.ok || !payload) return null;
-
-    return normalizeWatchedProgress(payload);
-  }
+  ...createTraktAuthServiceMethods01(),
+  fetchUserSettings
 };
 
 function normalizeHistoryItem(entry) {
@@ -465,7 +285,14 @@ function normalizePlaybackItem(entry) {
 
   const tmdbId = isEpisode ? show?.ids?.tmdb : media.ids?.tmdb;
   const traktId = isEpisode ? show?.ids?.trakt : media.ids?.trakt;
-  const contentId = tmdbId ? `tmdb:${tmdbId}` : traktId ? `trakt:${traktId}` : null;
+  const imdbId = isEpisode ? show?.ids?.imdb : media.ids?.imdb;
+  const contentId = imdbId
+    ? imdbId
+    : tmdbId
+      ? `tmdb:${tmdbId}`
+      : traktId
+        ? `trakt:${traktId}`
+        : null;
   if (!contentId) return null;
 
   return {
@@ -476,7 +303,7 @@ function normalizePlaybackItem(entry) {
     pausedAt: entry.paused_at,
     title: isEpisode ? show?.title : media.title,
     year: isEpisode ? show?.year : media.year,
-    imdbId: isEpisode ? show?.ids?.imdb : media.ids?.imdb,
+    imdbId,
     tmdbId,
     traktId,
     seasonNumber: isEpisode ? media.season : undefined,
@@ -491,7 +318,18 @@ function normalizeWatchedShowItem(entry) {
 
   const tmdbId = show.ids?.tmdb;
   const traktId = show.ids?.trakt;
-  const contentId = tmdbId ? `tmdb:${tmdbId}` : traktId ? `trakt:${traktId}` : null;
+  const imdbId = show.ids?.imdb;
+  const slug = show.ids?.slug;
+  // Android keeps the IMDB ID as the canonical content ID, while retaining
+  // TMDB/Trakt IDs for cross-source lookup. This is important for catalogs
+  // that use the same IMDB identity as Trakt's watched response.
+  const contentId = imdbId
+    ? imdbId
+    : tmdbId
+      ? `tmdb:${tmdbId}`
+      : traktId
+        ? `trakt:${traktId}`
+        : slug || null;
   if (!contentId) return null;
 
   const seasons = Array.isArray(entry.seasons)
@@ -502,7 +340,9 @@ function normalizeWatchedShowItem(entry) {
             ? season.episodes
                 .map((episode) => ({
                   number: Number(episode?.number || 0),
-                  plays: Number(episode?.plays || 0),
+                  // Android treats an omitted plays field as one watched play.
+                  // Trakt can omit it for older entries in the progress response.
+                  plays: episode?.plays == null ? 1 : Number(episode.plays),
                   lastWatchedAt: episode?.last_watched_at || null
                 }))
                 .filter((episode) => episode.number > 0 && episode.plays > 0)
@@ -516,9 +356,10 @@ function normalizeWatchedShowItem(entry) {
     contentId,
     title: show.title,
     year: show.year,
-    imdbId: show.ids?.imdb,
+    imdbId,
     tmdbId,
     traktId,
+    slug: slug || null,
     plays: Number(entry.plays || 0),
     lastWatchedAt: entry.last_watched_at || null,
     lastUpdatedAt: entry.last_updated_at || null,
@@ -558,18 +399,32 @@ function normalizeWatchedMovieItem(entry) {
 
   const tmdbId = movie.ids?.tmdb;
   const traktId = movie.ids?.trakt;
-  const contentId = tmdbId ? `tmdb:${tmdbId}` : traktId ? `trakt:${traktId}` : null;
+  const imdbId = movie.ids?.imdb;
+  const slug = movie.ids?.slug;
+  // Keep the same canonical order as Android's Trakt ID normalization.
+  const contentId = imdbId
+    ? imdbId
+    : tmdbId
+      ? `tmdb:${tmdbId}`
+      : traktId
+        ? `trakt:${traktId}`
+        : slug || null;
   if (!contentId) return null;
+  const lastWatchedAt = entry.last_watched_at || null;
+  const watchedAt = lastWatchedAt ? new Date(lastWatchedAt).getTime() : 0;
 
   return {
     type: "movie",
+    contentType: "movie",
     contentId,
     title: movie.title,
     year: movie.year,
-    imdbId: movie.ids?.imdb,
+    imdbId,
     tmdbId,
     traktId,
+    slug: slug || null,
     plays: Number(entry.plays || 0),
-    lastWatchedAt: entry.last_watched_at
+    watchedAt: Number.isFinite(watchedAt) ? watchedAt : 0,
+    lastWatchedAt
   };
 }

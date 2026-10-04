@@ -18,13 +18,19 @@
     unsupported_device_current_platform: "Current platform",
     unsupported_device_current_firmware: "Current firmware",
     unsupported_device_required_platform: "Required platform",
+    unsupported_device_warning:
+      "You can try to start Nuvio TV anyway, but the app may not work correctly on this TV. This configuration is not officially supported.",
     unsupported_device_close: "Close",
+    unsupported_device_try_anyway: "Try anyway",
     unsupported_device_unavailable: "Unavailable"
   };
   var SUPPORTED_LOCALES = [
+    "en",
     "ar",
+    "bg",
     "bs",
     "cs",
+    "da",
     "de",
     "el",
     "es",
@@ -46,11 +52,15 @@
     "ru",
     "sk",
     "sl",
+    "sr-latn",
+    "sq",
     "sv",
     "ta",
     "tr",
+    "uk",
     "vi",
-    "zh-cn"
+    "zh-cn",
+    "zh-tw"
   ];
   var active = true;
   var lastStage = "Loading startup files";
@@ -258,19 +268,23 @@
     } catch (ignored) {}
   }
 
-  function showUnsupportedDevice(info, options, messages) {
+  function showUnsupportedDevice(info, options, messages, onTryAnyway) {
     var overlay;
     var card;
     var logo;
     var title;
     var description;
+    var warning;
     var details;
     var rows;
     var index;
     var row;
     var label;
     var value;
+    var actions;
     var close;
+    var tryAnyway;
+    var bypassStarted = false;
 
     if (!document.body) {
       return;
@@ -303,6 +317,11 @@
     description.style.cssText =
       "font-size:25px;line-height:1.45;color:#c9c9c9;margin:0 auto 30px;max-width:900px;";
     description.textContent = messages.unsupported_device_message;
+
+    warning = document.createElement("div");
+    warning.style.cssText =
+      "font-size:21px;line-height:1.45;color:#f0c674;margin:0 auto 30px;max-width:900px;";
+    warning.textContent = messages.unsupported_device_warning;
 
     details = document.createElement("div");
     details.style.cssText =
@@ -338,24 +357,146 @@
     close.type = "button";
     close.textContent = messages.unsupported_device_close;
     close.style.cssText =
-      "min-width:190px;padding:17px 30px;border:2px solid #ffffff;border-radius:12px;" +
+      "min-width:230px;padding:17px 30px;border:2px solid #ffffff;border-radius:12px;" +
       "background:#ffffff;color:#111111;font-size:23px;font-weight:700;";
     close.onclick = function closeUnsupportedApp() {
       exitUnsupportedApp(info.platform);
     };
     close.onkeydown = function closeUnsupportedAppWithRemote(event) {
+      if (handleUnsupportedActionNavigation(event, close)) {
+        return;
+      }
       var keyCode = Number(event && event.keyCode);
       var key = String((event && event.key) || "");
       if (key === "Enter" || key === "OK" || keyCode === 13) {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
         exitUnsupportedApp(info.platform);
       }
     };
 
+    tryAnyway = document.createElement("button");
+    tryAnyway.type = "button";
+    tryAnyway.textContent = messages.unsupported_device_try_anyway;
+    tryAnyway.style.cssText =
+      "min-width:300px;padding:17px 30px;border:2px solid #767676;border-radius:12px;" +
+      "background:#252525;color:#ffffff;font-size:23px;font-weight:700;";
+
+    function focusUnsupportedAction(button) {
+      if (!button || typeof button.focus !== "function") {
+        return;
+      }
+      try {
+        button.focus();
+      } catch (ignored) {}
+    }
+
+    function moveUnsupportedActionFocus(currentButton, direction) {
+      var nextButton = currentButton;
+      if (currentButton === close && direction > 0) {
+        nextButton = tryAnyway;
+      } else if (currentButton === tryAnyway && direction < 0) {
+        nextButton = close;
+      }
+      if (nextButton !== currentButton) {
+        focusUnsupportedAction(nextButton);
+      }
+    }
+
+    function handleUnsupportedActionNavigation(event, currentButton) {
+      var keyCode = Number(event && (event.keyCode || event.which || 0));
+      var key = String((event && event.key) || "").toLowerCase();
+      var keyName = String(
+        (event && event.keyName) || (event && event.detail && event.detail.keyName) || ""
+      ).toLowerCase();
+      var code = String((event && event.code) || "").toLowerCase();
+      var direction = 0;
+      var names = [key, keyName, code];
+
+      if (
+        keyCode === 39 ||
+        keyCode === 40 ||
+        names.indexOf("arrowright") !== -1 ||
+        names.indexOf("right") !== -1 ||
+        names.indexOf("dpadright") !== -1 ||
+        names.indexOf("dpad_right") !== -1 ||
+        names.indexOf("arrowdown") !== -1 ||
+        names.indexOf("down") !== -1 ||
+        names.indexOf("dpaddown") !== -1 ||
+        names.indexOf("dpad_down") !== -1
+      ) {
+        direction = 1;
+      } else if (
+        keyCode === 37 ||
+        keyCode === 38 ||
+        names.indexOf("arrowleft") !== -1 ||
+        names.indexOf("left") !== -1 ||
+        names.indexOf("dpadleft") !== -1 ||
+        names.indexOf("dpad_left") !== -1 ||
+        names.indexOf("arrowup") !== -1 ||
+        names.indexOf("up") !== -1 ||
+        names.indexOf("dpadup") !== -1 ||
+        names.indexOf("dpad_up") !== -1
+      ) {
+        direction = -1;
+      }
+
+      if (!direction) {
+        return false;
+      }
+
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      moveUnsupportedActionFocus(currentButton, direction);
+      return true;
+    }
+
+    function startUnsupportedAppAnyway() {
+      if (bypassStarted) {
+        return;
+      }
+      bypassStarted = true;
+      active = true;
+      // Keep this opt-in in memory only so the gate is shown again after reload.
+      window.__NUVIO_COMPATIBILITY_BYPASSED__ = true;
+      removeOverlay();
+      if (typeof onTryAnyway === "function") {
+        onTryAnyway();
+      }
+    }
+
+    tryAnyway.onclick = startUnsupportedAppAnyway;
+    tryAnyway.onkeydown = function startUnsupportedAppAnywayWithRemote(event) {
+      if (handleUnsupportedActionNavigation(event, tryAnyway)) {
+        return;
+      }
+      var keyCode = Number(event && event.keyCode);
+      var key = String((event && event.key) || "");
+      if (key === "Enter" || key === "OK" || keyCode === 13) {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        startUnsupportedAppAnyway();
+      }
+    };
+
+    actions = document.createElement("div");
+    actions.style.cssText =
+      "display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;";
+
     card.appendChild(logo);
     card.appendChild(title);
     card.appendChild(description);
+    card.appendChild(warning);
     card.appendChild(details);
-    card.appendChild(close);
+    actions.appendChild(close);
+    actions.appendChild(tryAnyway);
+    card.appendChild(actions);
     overlay.appendChild(card);
     document.body.appendChild(overlay);
     document.documentElement.lang = info.locale;
@@ -424,7 +565,7 @@
     }
   }
 
-  function readTizenInfo() {
+  function readTizenInfo(includeDeviceDetails) {
     var platformVersion = "";
     var firmwareVersion = "";
     var modelName = "";
@@ -435,12 +576,14 @@
         );
       }
     } catch (ignored) {}
-    try {
-      if (window.webapis && window.webapis.productinfo) {
-        firmwareVersion = String(window.webapis.productinfo.getFirmware() || "");
-        modelName = String(window.webapis.productinfo.getModel() || "");
-      }
-    } catch (ignored) {}
+    if (includeDeviceDetails) {
+      try {
+        if (window.webapis && window.webapis.productinfo) {
+          firmwareVersion = String(window.webapis.productinfo.getFirmware() || "");
+          modelName = String(window.webapis.productinfo.getModel() || "");
+        }
+      } catch (ignored) {}
+    }
     if (!platformVersion) {
       platformVersion =
         (String((window.navigator && window.navigator.userAgent) || "").match(
@@ -482,7 +625,7 @@
     function renderUnsupported(resolvedInfo) {
       resolvedInfo.locale = locale;
       loadCompatibilityMessages(function onCompatibilityMessages(messages) {
-        showUnsupportedDevice(resolvedInfo, options, messages);
+        showUnsupportedDevice(resolvedInfo, options, messages, onSupported);
       });
     }
 
@@ -492,10 +635,13 @@
     }
 
     if (options.platform === "tizen") {
-      info = readTizenInfo();
+      // ProductInfo is only used to enrich the unsupported-device screen.
+      // Avoid invoking Samsung's optional ProductInfo methods on supported
+      // devices, where some firmware logs a misleading numeric status.
+      info = readTizenInfo(false);
       decision = compatibilityDecision(info, options);
       if (decision === "unsupported") {
-        renderUnsupported(info);
+        renderUnsupported(readTizenInfo(true));
         return;
       }
       onSupported();

@@ -1,4 +1,4 @@
-import { Router } from "../../navigation/router.js";
+import { Router } from "../../navigation/routerState.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { addonRepository } from "../../../data/repository/addonRepository.js";
 import { HomeCatalogStore } from "../../../data/local/homeCatalogStore.js";
@@ -9,6 +9,7 @@ import {
 } from "../../../core/addons/homeCatalogs.js";
 import { Platform } from "../../../platform/index.js";
 import { ExperienceModeStore } from "../../../data/local/experienceModeStore.js";
+import { renderLoadingIndicator } from "../../components/loadingIndicator.js";
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -31,9 +32,19 @@ export const CatalogOrderScreen = {
     }
     this.container = document.getElementById("catalogOrder");
     ScreenUtils.show(this.container);
+    this.mountToken = (this.mountToken || 0) + 1;
     this.focusRow = Number.isFinite(this.focusRow) ? this.focusRow : 0;
     this.focusCol = Number.isFinite(this.focusCol) ? this.focusCol : 0;
-    await this.render();
+    this.renderLoading();
+
+    // Android exposes the Catalog Order surface immediately and observes the
+    // addon state independently. Manifest resolution must not keep the route
+    // pending or make Back/D-pad wait for a remote addon response.
+    void this.render().catch((error) => {
+      if (Router.getCurrent() === "catalogOrder") {
+        console.warn("Catalog order background load failed", error);
+      }
+    });
   },
 
   async collectModel() {
@@ -143,7 +154,11 @@ export const CatalogOrderScreen = {
   },
 
   async render() {
+    const mountToken = this.mountToken;
     this.model = await this.collectModel();
+    if (mountToken !== this.mountToken || Router.getCurrent() !== "catalogOrder") {
+      return;
+    }
     this.rowColumns = new Map();
     const itemsHtml = this.model.items
       .map((item, index) => {
@@ -273,6 +288,23 @@ export const CatalogOrderScreen = {
   },
 
   cleanup() {
+    this.mountToken = (this.mountToken || 0) + 1;
     ScreenUtils.hide(this.container);
+  },
+
+  renderLoading() {
+    this.rowColumns = new Map();
+    this.container.innerHTML = `
+      <div class="catalog-order-shell">
+        <main class="catalog-order-main">
+          <h1 class="catalog-order-title">Reorder Home Catalogs</h1>
+          <p class="catalog-order-subtitle">This controls catalog row order on Home (Classic + Modern + Grid).</p>
+          <section class="catalog-order-list catalog-order-loading">
+            ${renderLoadingIndicator()}
+            <span>Loading...</span>
+          </section>
+        </main>
+      </div>
+    `;
   }
 };

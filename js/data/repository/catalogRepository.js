@@ -1,10 +1,12 @@
 import { safeApiCall } from "../../core/network/safeApiCall.js";
+import { selectCatalogEntries } from "../../core/util/catalogEntryMapper.js";
 import { CatalogApi } from "../remote/api/catalogApi.js";
 import { addonRepository } from "./addonRepository.js";
 
 class CatalogRepository {
   constructor() {
     this.catalogCache = new Map();
+    this.cacheGeneration = 0;
   }
 
   async getCatalog({
@@ -15,16 +17,21 @@ class CatalogRepository {
     catalogName,
     type,
     skip = 0,
+    skipStep = 100,
     extraArgs = {},
-    supportsSkip = true,
+    supportsSkip = false,
     signal = null
   }) {
+    const normalizedSkipStep = this.normalizeSkipStep(skipStep);
     const cacheKey = this.buildCacheKey({
+      addonBaseUrl,
       addonId,
       type,
       catalogId,
       skip,
-      extraArgs
+      skipStep: normalizedSkipStep,
+      extraArgs,
+      supportsSkip
     });
 
     const cached = this.catalogCache.get(cacheKey);
@@ -43,25 +50,19 @@ class CatalogRepository {
       extraArgs
     });
 
+    const cacheGeneration = this.cacheGeneration;
     return safeApiCall(() =>
       CatalogApi.getCatalog(url, signal ? { signal } : {}).then((dto) => {
-        const metas = Array.isArray(dto?.metas) ? dto.metas : [];
-        const items = metas
-          .filter(
-            (meta) =>
-              meta &&
-              typeof meta === "object" &&
-              String(meta.id || "").trim() &&
-              String(meta.name || "").trim()
-          )
-          .map((meta) => ({
-            ...this.mapMeta(meta),
-            addonBaseUrl,
-            addonId,
-            addonName,
-            catalogType: type
-          }));
+        const { metas, rawItemCount } = selectCatalogEntries(dto?.metas);
+        const items = metas.map((meta) => ({
+          ...this.mapMeta(meta),
+          addonBaseUrl,
+          addonId,
+          addonName,
+          catalogType: type
+        }));
 
+        const hasMore = Boolean(supportsSkip && rawItemCount > 0);
         const row = {
           addonId,
           addonName,
@@ -71,16 +72,22 @@ class CatalogRepository {
           apiType: type,
           items,
           isLoading: false,
-          hasMore: Boolean(supportsSkip && metas.length > 0),
-          currentPage: Math.floor(skip / 100),
-          nextSkip: supportsSkip && metas.length > 0 ? skip + metas.length : skip,
-          supportsSkip
+          hasMore,
+          currentPage: Math.floor(skip / normalizedSkipStep),
+          supportsSkip,
+          skipStep: normalizedSkipStep,
+          nextSkip: hasMore ? skip + rawItemCount : skip
         };
 
-        this.catalogCache.set(cacheKey, row);
+        if (cacheGeneration === this.cacheGeneration) this.catalogCache.set(cacheKey, row);
         return row;
       })
     );
+  }
+
+  clearCache() {
+    this.cacheGeneration += 1;
+    this.catalogCache.clear();
   }
 
   buildCatalogUrl({ baseUrl, type, catalogId, skip = 0, extraArgs = {} }) {
@@ -108,13 +115,36 @@ class CatalogRepository {
     return `${basePath}/catalog/${type}/${catalogId}/${query}.json${baseQuery}`;
   }
 
-  buildCacheKey({ addonId, type, catalogId, skip = 0, extraArgs = {} }) {
+  buildCacheKey({
+    addonBaseUrl = "",
+    addonId,
+    type,
+    catalogId,
+    skip = 0,
+    skipStep = 100,
+    extraArgs = {},
+    supportsSkip = false
+  }) {
     const normalizedArgs = Object.entries(extraArgs)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => `${key}=${value}`)
       .join("&");
 
-    return `${addonId}_${type}_${catalogId}_${skip}_${normalizedArgs}`;
+    return JSON.stringify([
+      addonRepository.canonicalizeUrl(addonBaseUrl),
+      addonId,
+      type,
+      catalogId,
+      skip,
+      skipStep,
+      supportsSkip,
+      normalizedArgs
+    ]);
+  }
+
+  normalizeSkipStep(value = 100) {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : 100;
   }
 
   encodeArg(value) {
@@ -131,6 +161,7 @@ class CatalogRepository {
       logo: meta.logo || null,
       description: meta.description || "",
       releaseInfo: meta.releaseInfo || "",
+      runtime: meta.runtime ?? null,
       genres: Array.isArray(meta.genres) ? meta.genres : []
     };
   }

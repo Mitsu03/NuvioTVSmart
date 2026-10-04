@@ -15,10 +15,13 @@ const cacheDir = path.join(rootDir, ".cache");
 const stagingDir = path.join(cacheDir, "webos-package");
 const appStageDir = path.join(stagingDir, "app");
 const serviceStageDir = path.join(stagingDir, "space.nuvio.webos.service");
+const pluginServiceStageDir = path.join(stagingDir, "space.nuvio.webos.plugin.service");
 
 const appName = "Nuvio TV";
 const webOsServiceId = "space.nuvio.webos.service";
+const webOsPluginServiceId = "space.nuvio.webos.plugin.service";
 const webOsServiceSourceDir = path.join(rootDir, "services", "webos");
+const webOsPluginServiceSourceDir = path.join(rootDir, "services", "webos", "plugin");
 const webOsRuntimeScriptPath = "assets/libs/webOSTV.js";
 
 async function assertDistExists() {
@@ -110,9 +113,9 @@ async function validateOpaquePng(filePath, label) {
   }
 }
 
-function validateWebOsServiceManifest(serviceManifest) {
-  if (String(serviceManifest?.id || "") !== webOsServiceId) {
-    throw new Error(`webOS services.json must use service id ${webOsServiceId}.`);
+function validateWebOsServiceManifest(serviceManifest, expectedId = webOsServiceId) {
+  if (String(serviceManifest?.id || "") !== expectedId) {
+    throw new Error(`webOS services.json must use service id ${expectedId}.`);
   }
 
   const services = Array.isArray(serviceManifest?.services) ? serviceManifest.services : [];
@@ -120,8 +123,8 @@ function validateWebOsServiceManifest(serviceManifest) {
     !services.length ||
     services.some(
       (service) =>
-        !String(service?.name || "").startsWith(`${webOsServiceId}.`) &&
-        String(service?.name || "") !== webOsServiceId
+        !String(service?.name || "").startsWith(`${expectedId}.`) &&
+        String(service?.name || "") !== expectedId
     )
   ) {
     throw new Error(
@@ -156,15 +159,13 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <title>${appName}</title>
   <script src="assets/runtime/legacy-features.js"></script>
-  <link rel="stylesheet" href="css/base.css" />
-  <link rel="stylesheet" href="css/layout.css" />
-  <link rel="stylesheet" href="css/components.css" />
-  <link rel="stylesheet" href="css/themes.css" />
+  <link rel="stylesheet" href="css/bundle.css" />
 </head>
 <body>
   <script src="boot-guard.js"></script>
   <script src="core-js.bundle.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
   <script>window.__NUVIO_PLATFORM__ = "webos";</script>
+  <script>window.__NUVIO_WEBOS_PLUGIN_SERVICE_ENABLED__ = true; window.__NUVIO_WEBOS_PLUGIN_SERVICE_ID__ = "${webOsPluginServiceId}";</script>
   <script src="nuvio.env.js"></script>
   <script src="assets/libs/qrcode-generator.js"></script>
 ${webOsScriptTag}  <script>
@@ -187,7 +188,7 @@ async function stageApp() {
   appInfo.version = version;
   appInfo.icon = "icon.png";
   appInfo.largeIcon = "largeIcon.png";
-  appInfo.services = [webOsServiceId];
+  appInfo.services = [webOsServiceId, webOsPluginServiceId];
   validateWebOsAppInfo(appInfo);
   await writeFile(appInfoPath, `${JSON.stringify(appInfo, null, 2)}\n`, "utf8");
 
@@ -267,6 +268,39 @@ async function stageService() {
   });
 }
 
+async function stagePluginService() {
+  const packageJsonPath = path.join(webOsPluginServiceSourceDir, "package.json");
+  const servicesManifestPath = path.join(webOsPluginServiceSourceDir, "services.json");
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+  const servicesManifest = JSON.parse(await readFile(servicesManifestPath, "utf8"));
+  validateWebOsServiceManifest(servicesManifest, webOsPluginServiceId);
+
+  await mkdir(path.join(pluginServiceStageDir, "src"), { recursive: true });
+  await Promise.all([
+    writeFile(
+      path.join(pluginServiceStageDir, "package.json"),
+      `${JSON.stringify(packageJson, null, 2)}\n`,
+      "utf8"
+    ),
+    writeFile(
+      path.join(pluginServiceStageDir, "services.json"),
+      `${JSON.stringify(servicesManifest, null, 2)}\n`,
+      "utf8"
+    )
+  ]);
+
+  await build({
+    entryPoints: [path.join(webOsPluginServiceSourceDir, "src", "index.js")],
+    outfile: path.join(pluginServiceStageDir, "src", "index.js"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: [`node${compatibilityPolicy.webOsServiceNodeVersion}`],
+    external: ["webos-service"],
+    logLevel: "silent"
+  });
+}
+
 async function packageWebOs() {
   await syncVersionFiles();
   await assertDistExists();
@@ -274,11 +308,17 @@ async function packageWebOs() {
   console.log("staging webOS package files...");
   await rm(stagingDir, { recursive: true, force: true });
   await mkdir(stagingDir, { recursive: true });
-  await Promise.all([stageApp(), stageService()]);
+  await Promise.all([stageApp(), stageService(), stagePluginService()]);
 
   console.log("creating webOS IPK...");
   try {
-    await runWebOsToolsBinary("ares-package", [appStageDir, serviceStageDir, "--outdir", rootDir]);
+    await runWebOsToolsBinary("ares-package", [
+      appStageDir,
+      serviceStageDir,
+      pluginServiceStageDir,
+      "--outdir",
+      rootDir
+    ]);
   } catch (error) {
     const { version } = await readAppMetadata();
     const expectedIpk = path.join(rootDir, `space.nuvio.webos_${version}_all.ipk`);

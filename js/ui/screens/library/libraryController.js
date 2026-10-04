@@ -7,8 +7,9 @@ import {
 } from "../../../data/repository/libraryRepository.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { I18n } from "../../../i18n/index.js";
-import { buildWatchedTitleIdSet } from "../../components/watchedTitleBadge.js";
+import { buildWatchedTitleIdSet, isTitleItemWatched } from "../../components/watchedTitleBadge.js";
 import {
   cloudLibraryRepository,
   cloudLibrarySettingsSignature
@@ -25,6 +26,11 @@ const MESSAGE_CLEAR_MS = 2400;
 const SYNC_LOADING_MIN_MS = 700;
 const LEADING_ARTICLE_REGEX = /^(the|an|a)\s+/i;
 export const LIBRARY_VIEW_MODE = { SAVED: "saved", CLOUD: "cloud" };
+export const LIBRARY_WATCHED_FILTER = {
+  ALL: "all",
+  WATCHED: "watched",
+  UNWATCHED: "unwatched"
+};
 
 export const LIBRARY_SORT_OPTIONS = [
   {
@@ -77,6 +83,7 @@ function makeInitialState() {
     selectedTypeKey: ALL_KEY,
     selectedGenre: null,
     selectedYear: null,
+    selectedWatchedFilter: LIBRARY_WATCHED_FILTER.ALL,
     selectedSortKey: LibrarySortOptionKey.ADDED_DESC,
     expandedPicker: null,
     pickerFocusIndex: 0,
@@ -219,12 +226,16 @@ function typeLabelForEmptyState(key) {
     .toLowerCase();
 }
 
+function itemTypeKey(item = {}) {
+  return String(item.mediaCategory || item.type || "")
+    .trim()
+    .toLowerCase();
+}
+
 function normalizeTypeTabs(items) {
   const byKey = new Map();
   items.forEach((item) => {
-    const key = String(item.type || "")
-      .trim()
-      .toLowerCase();
+    const key = itemTypeKey(item);
     if (!key || byKey.has(key)) {
       return;
     }
@@ -234,14 +245,7 @@ function normalizeTypeTabs(items) {
     { key: ALL_KEY, label: `${t("library_type_all", {}, "All")} (${items.length})` },
     ...Array.from(byKey.entries()).map(([key, label]) => ({
       key,
-      label: `${label} (${
-        items.filter(
-          (item) =>
-            String(item.type || "")
-              .trim()
-              .toLowerCase() === key
-        ).length
-      })`
+      label: `${label} (${items.filter((item) => itemTypeKey(item) === key).length})`
     }))
   ];
 }
@@ -305,12 +309,7 @@ function buildFacets(allItems, state) {
       : allItems;
   const selectedTypeKey = state.selectedTypeKey;
   const typeFiltered = listFiltered.filter((item) => {
-    return (
-      selectedTypeKey === ALL_KEY ||
-      String(item.type || "")
-        .trim()
-        .toLowerCase() === selectedTypeKey
-    );
+    return selectedTypeKey === ALL_KEY || itemTypeKey(item) === selectedTypeKey;
   });
   const itemsForTypeCounts = listFiltered.filter(
     (item) =>
@@ -332,12 +331,7 @@ function buildFacets(allItems, state) {
 function sortForState(items, state) {
   const selectedTypeKey = state.selectedTypeKey;
   const typeFiltered = items.filter((item) => {
-    return (
-      selectedTypeKey === ALL_KEY ||
-      String(item.type || "")
-        .trim()
-        .toLowerCase() === selectedTypeKey
-    );
+    return selectedTypeKey === ALL_KEY || itemTypeKey(item) === selectedTypeKey;
   });
 
   const listFiltered =
@@ -354,6 +348,13 @@ function sortForState(items, state) {
   const yearFiltered = state.selectedYear
     ? genreFiltered.filter((item) => itemMatchesYear(item, state.selectedYear))
     : genreFiltered;
+
+  const watchedFiltered =
+    state.selectedWatchedFilter === LIBRARY_WATCHED_FILTER.WATCHED
+      ? yearFiltered.filter((item) => isTitleItemWatched(item, state.watchedTitleIds))
+      : state.selectedWatchedFilter === LIBRARY_WATCHED_FILTER.UNWATCHED
+        ? yearFiltered.filter((item) => !isTitleItemWatched(item, state.watchedTitleIds))
+        : yearFiltered;
 
   const listMetaValue = (item, field) => {
     if (!state.selectedListKey) {
@@ -389,7 +390,7 @@ function sortForState(items, state) {
     return String(left.id).localeCompare(String(right.id), undefined, { sensitivity: "base" });
   };
 
-  const sorted = [...yearFiltered];
+  const sorted = [...watchedFiltered];
   sorted.sort((left, right) => {
     switch (state.selectedSortKey) {
       case LibrarySortOptionKey.DEFAULT: {
@@ -658,6 +659,23 @@ export class LibraryController {
     this.state.visibleItems = sortForState(this.state.allItems, this.state);
     this.onChange(this.getState());
 
+    void watchedTitleStateRepository
+      .getTitleWatchedItems(allItems, { baseWatchedItems: watchedItems, limit: 5000 })
+      .then((projectedItems) => {
+        if (this.disposed || reloadToken !== this.reloadToken) {
+          return;
+        }
+        this.setState(
+          { watchedTitleIds: buildWatchedTitleIdSet(projectedItems) },
+          { reason: "watchedTitleProjection" }
+        );
+      })
+      .catch((error) => {
+        if (!this.disposed && reloadToken === this.reloadToken) {
+          console.warn("Library watched title projection failed", error);
+        }
+      });
+
     let hydrationChanged = false;
     void libraryRepository
       .hydrateItems(allItems, {
@@ -726,6 +744,15 @@ export class LibraryController {
 
   getSelectedYearLabel() {
     return this.state.selectedYear || t("library_type_all", {}, "All");
+  }
+
+  getSelectedWatchedLabel() {
+    const labels = {
+      [LIBRARY_WATCHED_FILTER.ALL]: t("library_watched_filter_all", {}, "All"),
+      [LIBRARY_WATCHED_FILTER.WATCHED]: t("library_watched_filter_watched", {}, "Watched"),
+      [LIBRARY_WATCHED_FILTER.UNWATCHED]: t("library_watched_filter_unwatched", {}, "Unwatched")
+    };
+    return labels[this.state.selectedWatchedFilter] || labels[LIBRARY_WATCHED_FILTER.ALL];
   }
 
   getEmptyStateTitle() {
@@ -816,6 +843,22 @@ export class LibraryController {
         }))
       ];
     }
+    if (picker === "watched") {
+      return [
+        {
+          value: LIBRARY_WATCHED_FILTER.ALL,
+          label: t("library_watched_filter_all", {}, "All")
+        },
+        {
+          value: LIBRARY_WATCHED_FILTER.WATCHED,
+          label: t("library_watched_filter_watched", {}, "Watched")
+        },
+        {
+          value: LIBRARY_WATCHED_FILTER.UNWATCHED,
+          label: t("library_watched_filter_unwatched", {}, "Unwatched")
+        }
+      ];
+    }
     return [];
   }
 
@@ -837,7 +880,9 @@ export class LibraryController {
                   ? this.state.selectedGenre || ALL_KEY
                   : picker === "year"
                     ? this.state.selectedYear || ALL_KEY
-                    : this.state.selectedSortKey;
+                    : picker === "watched"
+                      ? this.state.selectedWatchedFilter
+                      : this.state.selectedSortKey;
       const optionIndex = Math.max(
         0,
         options.findIndex((item) => item.value === currentValue)
@@ -914,6 +959,10 @@ export class LibraryController {
     }
     if (picker === "year") {
       this.selectYear(option.value === ALL_KEY ? null : option.value);
+      return;
+    }
+    if (picker === "watched") {
+      this.selectWatchedFilter(option.value);
     }
   }
 
@@ -1053,6 +1102,17 @@ export class LibraryController {
   selectYear(key) {
     this.setState({
       selectedYear: key || null,
+      expandedPicker: null,
+      pickerFocusIndex: 0
+    });
+  }
+
+  selectWatchedFilter(key) {
+    const selectedWatchedFilter = Object.values(LIBRARY_WATCHED_FILTER).includes(key)
+      ? key
+      : LIBRARY_WATCHED_FILTER.ALL;
+    this.setState({
+      selectedWatchedFilter,
       expandedPicker: null,
       pickerFocusIndex: 0
     });
@@ -1272,6 +1332,9 @@ export class LibraryController {
   }
 
   async refreshNow() {
+    if (this.state.isSyncing) {
+      return false;
+    }
     const startedAt = Date.now();
     this.setState({ isSyncing: true, errorMessage: null });
     try {
