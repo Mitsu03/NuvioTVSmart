@@ -64,7 +64,7 @@ export function createMetaDetailsScreenMethods06() {
                   ...video,
                   title: episode.title || video.title,
                   overview: episode.overview || video.overview,
-                  released: settings.useReleaseDates ? episode.airDate || video.released : video.released,
+                  released: settings.useReleaseDates && !video.simklReleased ? episode.airDate || video.released : video.released,
                   thumbnail: episode.thumbnail || video.thumbnail,
                   runtime: episode.runtime || video.runtime
                 };
