@@ -14,7 +14,7 @@ import {
 
 const RELEASES_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const RELEASES_FAILURE_CACHE_TTL_MS = 10 * 60 * 1000;
-const RELEASE_DATES_TIMEOUT_MS = 5000;
+const RELEASE_DATES_TIMEOUT_MS = 3000;
 
 const releasesCache = new Map();
 const searchCache = new Map();
