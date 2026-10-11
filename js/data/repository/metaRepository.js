@@ -1,6 +1,7 @@
 import { safeApiCall } from "../../core/network/safeApiCall.js";
 import { addonRepository } from "./addonRepository.js";
 import { MetaApi } from "../remote/api/metaApi.js";
+import { withSimklReleaseDates } from "./simklEpisodeReleaseDates.js";
 
 const INSTALLED_ADDONS_WAIT_MS = 750;
 
@@ -65,10 +66,11 @@ class MetaRepository {
         return result;
       }
 
-      const meta = this.mapMeta(result.data?.meta || null);
-      if (!meta) {
+      const mappedMeta = this.mapMeta(result.data?.meta || null);
+      if (!mappedMeta) {
         return { status: "error", message: "Meta not found", code: 404 };
       }
+      const meta = await withSimklReleaseDates(mappedMeta);
 
       [effectiveType, requestedType, inferredType].forEach((cacheType) => {
         if (cacheType) {
