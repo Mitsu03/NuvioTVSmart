@@ -14,7 +14,8 @@ import {
 
 const RELEASES_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const RELEASES_FAILURE_CACHE_TTL_MS = 10 * 60 * 1000;
-const RELEASE_DATES_TIMEOUT_MS = 3000;
+// Below the 1800 ms Continue Watching gives a whole meta load.
+const RELEASE_DATES_TIMEOUT_MS = 1500;
 
 const releasesCache = new Map();
 const searchCache = new Map();
