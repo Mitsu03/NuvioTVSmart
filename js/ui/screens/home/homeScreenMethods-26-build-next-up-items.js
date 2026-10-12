@@ -242,7 +242,7 @@ export function createHomeScreenMethods26() {
                   ...video,
                   title: settings.useEpisodes ? episode.title || video.title : video.title,
                   overview: settings.useEpisodes ? episode.overview || video.overview : video.overview,
-                  released: settings.useReleaseDates ? episode.airDate || video.released : video.released,
+                  released: settings.useReleaseDates && !video.simklReleased ? episode.airDate || video.released : video.released,
                   thumbnail: settings.useEpisodes ? episode.thumbnail || video.thumbnail : video.thumbnail,
                   runtime: settings.useEpisodes ? episode.runtime || video.runtime : video.runtime
                 };
