@@ -70,7 +70,7 @@ export function createMetaDetailsScreenMethods06() {
                   overview: settings.useEpisodes ? episode.overview || video.overview : video.overview,
                   thumbnail: settings.useEpisodes ? episode.thumbnail || video.thumbnail : video.thumbnail,
                   runtime: settings.useEpisodes ? episode.runtime || video.runtime : video.runtime,
-                  released: settings.useReleaseDates ? episode.airDate || video.released : video.released
+                  released: settings.useReleaseDates && !video.simklReleased ? episode.airDate || video.released : video.released
                 };
               })
             : meta.videos;

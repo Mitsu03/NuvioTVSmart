@@ -317,7 +317,16 @@ test("TMDB air dates can replace wrong addon dates without enabling episode text
     name: "Black Clover",
     released: "2026-01-14T23:00:00Z",
     releaseInfo: "2026",
-    videos: [{ season: 1, episode: 1, title: "Addon title", released: "2026-01-14T23:00:00Z" }]
+    videos: [
+      { season: 1, episode: 1, title: "Addon title", released: "2026-01-14T23:00:00Z" },
+      {
+        season: 1,
+        episode: 2,
+        title: "Simkl title",
+        released: "2026-01-16T14:00:00Z",
+        simklReleased: true
+      }
+    ]
   };
   api.fixtures.settings.useEpisodes = false;
   api.fixtures.settings.useReleaseDates = true;
@@ -328,13 +337,17 @@ test("TMDB air dates can replace wrong addon dates without enabling episode text
       localizedTitle: "TMDB title"
     }),
     fetchEpisodeEnrichment: async () =>
-      new Map([["1:1", { title: "TMDB episode", airDate: "2026-01-15" }]])
+      new Map([
+        ["1:1", { title: "TMDB episode", airDate: "2026-01-15" }],
+        ["1:2", { title: "TMDB episode 2", airDate: "2026-01-17" }]
+      ])
   };
   const result = await api.createMetaDetailsScreenMethods06().enrichMeta.call({}, meta);
   assert.equal(result.released, "2026-01-15");
   assert.equal(result.releaseInfo, "2026–");
   assert.equal(result.videos[0].released, "2026-01-15");
   assert.equal(result.videos[0].title, "Addon title");
+  assert.equal(result.videos[1].released, "2026-01-16T14:00:00Z");
 
   api.fixtures.settings.useReleaseDates = false;
   const original = await api.createMetaDetailsScreenMethods06().enrichMeta.call({}, meta);

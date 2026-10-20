@@ -22,7 +22,16 @@ export function createPlayerScreenMethods46() {
         this.htmlSubtitleRenderTimer = null;
       }
       const render = () => {
+        // webOS hands embedded subtitles over in blocks, so the cue list is empty
+        // for a moment between one block and the next. Blank the overlay and keep
+        // polling rather than ending the loop: ending it left the last cue painted
+        // on screen for the rest of playback, with no way back except reselecting
+        // the track, while the native renderer carried on underneath.
         if (!this.renderHtmlSubtitleOverlayAtCurrentTime()) {
+          this.renderHtmlSubtitleOverlayCue([]);
+        }
+        if (!this.htmlSubtitleSelectedId) {
+          // clearHtmlSubtitleOverlay() tore the overlay down. Stop for good.
           this.htmlSubtitleRenderTimer = null;
           return;
         }
