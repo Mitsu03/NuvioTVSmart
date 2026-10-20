@@ -40,7 +40,7 @@ export function createMetaDetailsScreenMethods06() {
         }
         const isSeries = isSeriesDetailMeta(meta, meta?.videos || this.episodes);
         const episodeMap =
-          settings.useEpisodes && isSeries
+          (settings.useEpisodes || settings.useReleaseDates) && isSeries
             ? await TmdbMetadataService.fetchEpisodeEnrichment({
                 tmdbId,
                 seasonNumbers: (Array.isArray(meta.videos) ? meta.videos : [])
@@ -62,11 +62,11 @@ export function createMetaDetailsScreenMethods06() {
                 }
                 return {
                   ...video,
-                  title: episode.title || video.title,
-                  overview: episode.overview || video.overview,
+                  title: settings.useEpisodes ? episode.title || video.title : video.title,
+                  overview: settings.useEpisodes ? episode.overview || video.overview : video.overview,
                   released: settings.useReleaseDates && !video.simklReleased ? episode.airDate || video.released : video.released,
-                  thumbnail: episode.thumbnail || video.thumbnail,
-                  runtime: episode.runtime || video.runtime
+                  thumbnail: settings.useEpisodes ? episode.thumbnail || video.thumbnail : video.thumbnail,
+                  runtime: settings.useEpisodes ? episode.runtime || video.runtime : video.runtime
                 };
               })
             : meta.videos;
