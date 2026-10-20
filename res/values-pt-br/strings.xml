@@ -1051,6 +1051,8 @@
     <string name="tmdb_networks_title">Emissora</string>
     <string name="tmdb_networks_subtitle">Logos de emissoras do TMDB</string>
     <string name="tmdb_episodes_title">Episódios</string>
+    <string name="tmdb_release_dates_title">Datas de lançamento</string>
+    <string name="tmdb_release_dates_subtitle">Usar as datas de exibição do TMDB em vez dos horários de lançamento dos addons</string>
     <string name="tmdb_episodes_subtitle">Títulos, sinopses, imagens e duração dos episódios</string>
     <string name="tmdb_trailers_title">Trailers</string>
     <string name="tmdb_trailers_subtitle">Opções de trailers do TMDB para a seção de detalhes</string>

@@ -1070,6 +1070,8 @@
     <string name="tmdb_networks_title">Canais/Redes (Networks)</string>
     <string name="tmdb_networks_subtitle">Canais de transmissão com logótipos do TMDB</string>
     <string name="tmdb_episodes_title">Episódios</string>
+    <string name="tmdb_release_dates_title">Datas de lançamento</string>
+    <string name="tmdb_release_dates_subtitle">Usar as datas de emissão do TMDB em vez das horas de lançamento dos addons</string>
     <string name="tmdb_episodes_subtitle">Títulos dos episódios, sinopses, miniaturas e duração do TMDB</string>
     <string name="tmdb_trailers_title">Trailers</string>
     <string name="tmdb_trailers_subtitle">Candidatos a trailer a partir de vídeos do TMDB para a secção de trailers dos detalhes</string>

@@ -25,7 +25,7 @@ export function createTmdbMetadataServiceMethods02() {
     async fetchEpisodeEnrichment({ tmdbId, seasonNumbers = [], language = null } = {}) {
       const settings = TmdbSettingsStore.get();
       const apiKey = String(TMDB_API_KEY || "").trim();
-      if (!settings.enabled || !settings.useEpisodes || !apiKey || !tmdbId) {
+      if (!settings.enabled || (!settings.useEpisodes && !settings.useReleaseDates) || !apiKey || !tmdbId) {
         return new Map();
       }
 

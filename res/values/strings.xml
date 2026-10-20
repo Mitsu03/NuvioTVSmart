@@ -1136,6 +1136,8 @@
     <string name="tmdb_networks_title">Networks</string>
     <string name="tmdb_networks_subtitle">Networks with logos from TMDB</string>
     <string name="tmdb_episodes_title">Episodes</string>
+    <string name="tmdb_release_dates_title">Release dates</string>
+    <string name="tmdb_release_dates_subtitle">Use TMDB broadcaster air dates instead of precise add-on release times</string>
     <string name="tmdb_episodes_subtitle">Episode titles, overviews, thumbnails, and runtime from TMDB</string>
     <string name="tmdb_trailers_title">Trailers</string>
     <string name="tmdb_trailers_subtitle">Trailer candidates from TMDB videos for the detail trailer section</string>

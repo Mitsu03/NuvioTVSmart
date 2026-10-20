@@ -244,7 +244,7 @@ export function createHomeScreenMethods26() {
           null
         ).catch(() => null);
         const episodeMapPromise =
-          isSeries && settings.useEpisodes && item.season != null && Number(item.season) >= 0
+          isSeries && (settings.useEpisodes || settings.useReleaseDates) && item.season != null && Number(item.season) >= 0
             ? withTimeout(
                 TmdbMetadataService.fetchEpisodeEnrichment({
                   tmdbId,
@@ -278,7 +278,8 @@ export function createHomeScreenMethods26() {
                   title: settings.useEpisodes ? episode.title || video.title : video.title,
                   overview: settings.useEpisodes ? episode.overview || video.overview : video.overview,
                   thumbnail: settings.useEpisodes ? episode.thumbnail || video.thumbnail : video.thumbnail,
-                  runtime: settings.useEpisodes ? episode.runtime || video.runtime : video.runtime
+                  runtime: settings.useEpisodes ? episode.runtime || video.runtime : video.runtime,
+                  released: settings.useReleaseDates ? episode.airDate || video.released : video.released
                 };
               })
             : meta.videos;
@@ -298,6 +299,8 @@ export function createHomeScreenMethods26() {
           language: settings.useDetails ? showEnrichment.language || meta.language : meta.language,
           ageRating: settings.useDetails ? showEnrichment.ageRating || meta.ageRating : meta.ageRating,
           status: settings.useDetails ? showEnrichment.status || meta.status : meta.status,
+          releaseInfo: settings.useReleaseDates ? showEnrichment.releaseInfo || meta.releaseInfo : meta.releaseInfo,
+          released: settings.useReleaseDates ? showEnrichment.released || meta.released : meta.released,
           tmdbRating:
             settings.useBasicInfo && typeof showEnrichment.rating === "number" ? Number(showEnrichment.rating.toFixed(1)) : meta.tmdbRating,
           episodeThumbnail: settings.useArtwork ? currentEpisode?.thumbnail || meta.episodeThumbnail : meta.episodeThumbnail,

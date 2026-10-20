@@ -25,6 +25,9 @@ export function renderTmdbIntegrationDetail(model) {
   this.actionMap.set("integration:tmdb:details", () => {
     toggleTmdbSetting("useDetails");
   });
+  this.actionMap.set("integration:tmdb:releaseDates", () => {
+    toggleTmdbSetting("useReleaseDates");
+  });
   this.actionMap.set("integration:tmdb:credits", () => {
     toggleTmdbSetting("useCredits");
   });
@@ -113,6 +116,13 @@ export function renderTmdbIntegrationDetail(model) {
               title: t("settings.integration.tmdb.details.title"),
               subtitle: t("settings.integration.tmdb.details.subtitle"),
               checked: Boolean(model.tmdb.useDetails),
+              disabled: !model.tmdb.enabled
+            })}
+            ${this.renderToggleRow({
+              focusKey: "integration:tmdb:releaseDates",
+              title: t("tmdb_release_dates_title", {}, "Release dates"),
+              subtitle: t("tmdb_release_dates_subtitle", {}, "Use TMDB broadcaster air dates instead of precise add-on release times"),
+              checked: model.tmdb.useReleaseDates === true,
               disabled: !model.tmdb.enabled
             })}
             ${this.renderToggleRow({

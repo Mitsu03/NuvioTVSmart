@@ -103,6 +103,7 @@ export const tmdb_settings = {
       tmdb_use_artwork: settings.useArtwork !== false,
       tmdb_use_basic_info: settings.useBasicInfo !== false,
       tmdb_use_details: settings.useDetails !== false,
+      tmdb_use_release_dates: settings.useReleaseDates === true,
       tmdb_use_credits: settings.useCredits !== false,
       tmdb_use_productions: settings.useProductions !== false,
       tmdb_use_networks: settings.useNetworks !== false,
@@ -163,6 +164,9 @@ export const tmdb_settings = {
     }
     if (booleanOrNull(raw.tmdb_use_details) != null) {
       partial.useDetails = Boolean(raw.tmdb_use_details);
+    }
+    if (booleanOrNull(raw.tmdb_use_release_dates) != null) {
+      partial.useReleaseDates = Boolean(raw.tmdb_use_release_dates);
     }
     if (booleanOrNull(raw.tmdb_use_credits) != null) {
       partial.useCredits = Boolean(raw.tmdb_use_credits);

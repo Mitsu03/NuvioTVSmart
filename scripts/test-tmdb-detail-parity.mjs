@@ -58,16 +58,14 @@ async function setup() {
         setup(b) {
           b.onLoad(
             {
-              filter: /(?:config|tmdbSettingsStore|pluginServiceClient)\.js$|platform\/index\.js$/
+              filter: /(?:tmdbSettingsStore|pluginServiceClient)\.js$|platform[\\/]index\.js$/
             },
             ({ path }) => {
-              const contents = path.endsWith("config.js")
-                ? 'export const TMDB_API_KEY = "fixture-key";'
-                : path.endsWith("tmdbSettingsStore.js")
-                  ? "export const { TmdbSettingsStore, normalizeTmdbLanguageCode } = fixtures;"
-                  : path.endsWith("pluginServiceClient.js")
-                    ? "export const { PluginServiceClient } = fixtures;"
-                    : "export const { Platform } = fixtures;";
+              const contents = path.endsWith("tmdbSettingsStore.js")
+                ? "export const { TmdbSettingsStore, normalizeTmdbLanguageCode } = fixtures;"
+                : path.endsWith("pluginServiceClient.js")
+                  ? "export const { PluginServiceClient } = fixtures;"
+                  : "export const { Platform } = fixtures;";
               return { contents, loader: "js" };
             }
           );
@@ -87,6 +85,7 @@ async function setup() {
   });
   const context = vm.createContext({
     fixtures,
+    __NUVIO_ENV__: { TMDB_API_KEY: "fixture-key" },
     URL,
     AbortController,
     console: { warn: (...args) => warnings.push(args) },
@@ -230,8 +229,9 @@ test("metadata uses packaged webOS transport with direct fallback; Tizen/browser
   api.fixtures.webos = true;
   api.fixtures.respond = async () => tvData();
   await api.TmdbMetadataService.fetchEnrichment({ tmdbId: "7", contentType: "series" });
-  assert.equal(api.calls[0].service, true);
-  assert.equal(api.calls[0].maxResponseBytes, 5 * 1024 * 1024);
+  const serviceCall = api.calls.find((call) => call.service);
+  assert.equal(serviceCall?.service, true, JSON.stringify(api.calls));
+  assert.equal(serviceCall.maxResponseBytes, 5 * 1024 * 1024);
   api.fixtures.PluginServiceClient.fetch = async () => {
     throw Error("Service unavailable");
   };
@@ -307,6 +307,39 @@ test("detail starts main and episode enrichment together, preserves dates and ad
   assert.equal(result.videos[0].title, "Translated Episode");
   assert.equal(result.networks, meta.networks);
   assert.equal(result.productionCompanies, meta.productionCompanies);
+});
+
+test("TMDB air dates can replace wrong addon dates without enabling episode text", async () => {
+  const api = await setup();
+  const meta = {
+    id: "7",
+    type: "series",
+    name: "Black Clover",
+    released: "2026-01-14T23:00:00Z",
+    releaseInfo: "2026",
+    videos: [{ season: 1, episode: 1, title: "Addon title", released: "2026-01-14T23:00:00Z" }]
+  };
+  api.fixtures.settings.useEpisodes = false;
+  api.fixtures.settings.useReleaseDates = true;
+  api.fixtures.TmdbMetadataService = {
+    fetchEnrichment: async () => ({
+      released: "2026-01-15",
+      releaseInfo: "2026–",
+      localizedTitle: "TMDB title"
+    }),
+    fetchEpisodeEnrichment: async () =>
+      new Map([["1:1", { title: "TMDB episode", airDate: "2026-01-15" }]])
+  };
+  const result = await api.createMetaDetailsScreenMethods06().enrichMeta.call({}, meta);
+  assert.equal(result.released, "2026-01-15");
+  assert.equal(result.releaseInfo, "2026–");
+  assert.equal(result.videos[0].released, "2026-01-15");
+  assert.equal(result.videos[0].title, "Addon title");
+
+  api.fixtures.settings.useReleaseDates = false;
+  const original = await api.createMetaDetailsScreenMethods06().enrichMeta.call({}, meta);
+  assert.equal(original.videos, meta.videos);
+  assert.equal(original.released, meta.released);
 });
 
 test("detail resolves route ID and keeps successful episode data when the main request fails", async () => {

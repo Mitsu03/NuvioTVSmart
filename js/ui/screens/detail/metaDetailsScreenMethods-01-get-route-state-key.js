@@ -8,7 +8,8 @@ export function createMetaDetailsScreenMethods01() {
     resolveTrailerTrustedProxyOrigin,
     resolveTrailerSource,
     normalizeTrailerProxyStatePayload,
-    captureHorizontalScrollMap
+    captureHorizontalScrollMap,
+    TmdbSettingsStore
   } = internals;
 
   return {
@@ -17,7 +18,7 @@ export function createMetaDetailsScreenMethods01() {
       if (!itemId) {
         return null;
       }
-      return `detail:${String(params?.itemType || "movie").trim() || "movie"}:${itemId}`;
+      return `detail:${String(params?.itemType || "movie").trim() || "movie"}:${itemId}:tmdbDates:${TmdbSettingsStore.get().useReleaseDates === true}`;
     },
     captureRouteState() {
       const content = this.container?.querySelector(".series-detail-content");

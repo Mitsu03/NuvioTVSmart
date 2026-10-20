@@ -43,7 +43,7 @@ export function createMetaDetailsScreenMethods06() {
             console.warn("Meta TMDB enrichment failed", error);
             return null;
           }),
-          settings.useEpisodes && isSeries
+          (settings.useEpisodes || settings.useReleaseDates) && isSeries
             ? TmdbMetadataService.fetchEpisodeEnrichment({
                 tmdbId,
                 seasonNumbers: (Array.isArray(meta.videos) ? meta.videos : [])
@@ -66,10 +66,11 @@ export function createMetaDetailsScreenMethods06() {
                 }
                 return {
                   ...video,
-                  title: episode.title || video.title,
-                  overview: episode.overview || video.overview,
-                  thumbnail: episode.thumbnail || video.thumbnail,
-                  runtime: episode.runtime || video.runtime
+                  title: settings.useEpisodes ? episode.title || video.title : video.title,
+                  overview: settings.useEpisodes ? episode.overview || video.overview : video.overview,
+                  thumbnail: settings.useEpisodes ? episode.thumbnail || video.thumbnail : video.thumbnail,
+                  runtime: settings.useEpisodes ? episode.runtime || video.runtime : video.runtime,
+                  released: settings.useReleaseDates ? episode.airDate || video.released : video.released
                 };
               })
             : meta.videos;
@@ -88,8 +89,10 @@ export function createMetaDetailsScreenMethods06() {
           // languages are available; show the localized text title in that case.
           logo: settings.useArtwork ? enrichment.logo : meta.logo,
           genres: settings.useBasicInfo ? mergeGenreLists(meta.genres, enrichment.genres) : meta.genres,
-          // Preserve addon dates, matching Android's TMDB enrichment policy.
-          released: meta.released || meta.releaseDate || meta.release_date || null,
+          released: settings.useReleaseDates
+            ? enrichment.released || meta.released || meta.releaseDate || meta.release_date || null
+            : meta.released || meta.releaseDate || meta.release_date || null,
+          releaseInfo: settings.useReleaseDates ? enrichment.releaseInfo || meta.releaseInfo : meta.releaseInfo,
           runtime: settings.useDetails ? enrichment.runtime || meta.runtime : meta.runtime,
           country: settings.useDetails ? enrichment.country || meta.country : meta.country,
           language: settings.useDetails ? enrichment.language || meta.language : meta.language,

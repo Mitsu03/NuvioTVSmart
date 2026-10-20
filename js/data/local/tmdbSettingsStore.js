@@ -1,4 +1,5 @@
 import { createProfileScopedStore } from "./profileScopedStore.js";
+import { LocalStore } from "../../core/storage/localStore.js";
 
 const KEY = "tmdbSettings";
 
@@ -10,6 +11,7 @@ const DEFAULTS = {
   useArtwork: true,
   useBasicInfo: true,
   useDetails: true,
+  useReleaseDates: false,
   useCredits: true,
   useProductions: true,
   useNetworks: true,
@@ -43,6 +45,7 @@ function normalizeTmdbSettings(value = {}) {
     useArtwork: source.useArtwork !== false,
     useBasicInfo: source.useBasicInfo !== false,
     useDetails: source.useDetails !== false,
+    useReleaseDates: source.useReleaseDates === true,
     useCredits: source.useCredits !== false,
     useProductions: source.useProductions !== false,
     useNetworks: source.useNetworks !== false,
@@ -68,14 +71,24 @@ export const TmdbSettingsStore = {
   },
 
   replaceForProfile(profileId, nextValue, options = {}) {
-    return store.replaceForProfile(profileId, nextValue, options);
+    const previous = store.getForProfile(profileId).useReleaseDates;
+    const updated = store.replaceForProfile(profileId, nextValue, options);
+    if (previous !== updated.useReleaseDates) {
+      LocalStore.remove("homeContinueWatchingEnrichmentCache");
+      LocalStore.remove("homeContinueWatchingDisplaySnapshot");
+    }
+    return updated;
   },
 
   setForProfile(profileId, partial, options = {}) {
-    return store.setForProfile(profileId, partial, options);
+    return this.replaceForProfile(
+      profileId,
+      { ...store.getForProfile(profileId), ...partial },
+      options
+    );
   },
 
   set(partial, options = {}) {
-    return store.set(partial, options);
+    return this.setForProfile(options.profileId, partial, options);
   }
 };
