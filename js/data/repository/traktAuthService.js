@@ -1,3 +1,4 @@
+import { ProfileManager } from "../../core/profile/profileManager.js";
 import {
   TRAKT_API_URL,
   TRAKT_CLIENT_ID,
@@ -195,9 +196,10 @@ function isTokenExpiredOrExpiring(state) {
   return Date.now() / 1000 >= expiresAt - REFRESH_LEEWAY_SECONDS;
 }
 
-async function fetchUserSettings() {
+async function fetchUserSettings(profileId = ProfileManager.getActiveProfileId()) {
+  if (ProfileManager.getActiveProfileId() !== profileId) return null;
   const token = await TraktAuthService.getValidAccessToken();
-  if (!token) {
+  if (!token || ProfileManager.getActiveProfileId() !== profileId) {
     return null;
   }
   const { response, payload } = await requestJson("/users/settings", {
@@ -209,7 +211,7 @@ async function fetchUserSettings() {
   const user = payload?.user || {};
   const username = user.username || null;
   const userSlug = user.ids?.slug || null;
-  TraktAuthStore.saveUser({ username, userSlug });
+  TraktAuthStore.saveUser({ username, userSlug }, profileId);
   return username;
 }
 

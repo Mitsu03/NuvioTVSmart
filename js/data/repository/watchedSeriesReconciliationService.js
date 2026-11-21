@@ -1,3 +1,5 @@
+import { hasPendingManualWatched } from "../mediaserver/manualServerWatched.js";
+import { ProfileManager } from "../../core/profile/profileManager.js";
 import { metaRepository } from "./metaRepository.js";
 import { watchedItemsRepository } from "./watchedItemsRepository.js";
 import { watchProgressRepository } from "./watchProgressRepository.js";
@@ -49,6 +51,9 @@ function parseSeasonEpisodeFromVideoId(rawId = "") {
 }
 
 function normalizeEpisode(video = {}) {
+  // An explicit specials season must not be inferred as season one.
+  const declaredSeason = video.season ?? video.seasonNumber;
+  if (declaredSeason != null && Number(declaredSeason) === 0) return null;
   const parsed = parseSeasonEpisodeFromVideoId(video.id);
   const episode = firstPositiveInt([
     video.episode,
@@ -195,6 +200,7 @@ async function markReleasedEpisodes(
   watchedAt = Date.now(),
   { skipTrackingWrite = false } = {}
 ) {
+  const profileId = ProfileManager.getActiveProfileId();
   const episodes = getReleasedMainEpisodes(meta);
   if (!episodes.length) {
     return false;
@@ -208,6 +214,7 @@ async function markReleasedEpisodes(
     season: episode.season,
     episode: episode.episode,
     videoId: episode.id,
+    released: episode.released,
     watchedAt
   }));
   const progressItems = episodes.map((episode) => ({
@@ -225,22 +232,33 @@ async function markReleasedEpisodes(
     durationMs: 100,
     updatedAt: watchedAt
   }));
-  await watchedItemsRepository.markBatch(watchedItems, { skipTrackingWrite });
-  await watchProgressRepository.saveProgressBatch(progressItems);
-  return true;
+  const outcome = await watchedItemsRepository.markBatch(watchedItems, { skipTrackingWrite });
+  if (ProfileManager.getActiveProfileId() !== profileId) {
+    return false;
+  }
+  await watchProgressRepository.saveProgressBatch(
+    progressItems.filter((item) =>
+      outcome.succeeded.some((entry) => entry.videoId === item.videoId)
+    )
+  );
+  return outcome.ok;
 }
 
 export const watchedSeriesReconciliationService = {
   isSeriesType,
 
   async reconcile(contentId, contentType = "series", options = {}) {
+    const profileId = ProfileManager.getActiveProfileId();
     const normalizedContentId = String(contentId || "").trim();
     const normalizedType = String(contentType || "series").trim() || "series";
+    // Do not promote optimistic episode writes to a confirmed whole-series badge.
+    if (hasPendingManualWatched(normalizedContentId, profileId)) return false;
     if (!normalizedContentId || !isSeriesType(normalizedType)) {
       return false;
     }
 
     const meta = await loadSeriesMeta(normalizedContentId, normalizedType, options.meta || null);
+    if (ProfileManager.getActiveProfileId() !== profileId) return false;
     const episodes = getReleasedMainEpisodes(meta || {});
     if (!episodes.length) {
       return false;
@@ -252,6 +270,7 @@ export const watchedSeriesReconciliationService = {
       watchProgressRepository.getAll().catch(() => []),
       watchedItemsRepository.isWatched(normalizedContentId).catch(() => false)
     ]);
+    if (ProfileManager.getActiveProfileId() !== profileId) return false;
     const hasRemoteSimklSeriesMarker = watchedItems.some((item) =>
       isRemoteSimklSeriesMarker(item, contentReference)
     );
@@ -326,29 +345,37 @@ export const watchedSeriesReconciliationService = {
       return false;
     }
     const watchedAt = Date.now();
+    const profileId = ProfileManager.getActiveProfileId();
     const meta = await loadSeriesMeta(normalizedContentId, normalizedType, options.meta || null);
-    await watchedItemsRepository.mark({
-      contentId: normalizedContentId,
-      ...buildProviderIdentityOptions(normalizedType, normalizedContentId, meta),
-      title: meta?.name || options.title || normalizedContentId,
+    if (ProfileManager.getActiveProfileId() !== profileId) {
+      return false;
+    }
+    // Resolve episodes before mutating the local badge or any provider history.
+    if (!getReleasedMainEpisodes(meta || {}).length) {
+      return false;
+    }
+    const markedEpisodes = await markReleasedEpisodes(
+      normalizedContentId,
+      normalizedType,
+      meta,
       watchedAt
-    });
-    const markedEpisodes = meta
-      ? await markReleasedEpisodes(normalizedContentId, normalizedType, meta, watchedAt, {
-          skipTrackingWrite: true
-        })
-      : false;
+    );
     if (!markedEpisodes) {
-      await watchProgressRepository.saveProgress({
+      detailWatchedEnrichmentService.invalidateCache(normalizedContentId);
+      return false;
+    }
+    if (ProfileManager.getActiveProfileId() !== profileId) {
+      return false;
+    }
+    await watchedItemsRepository.mark(
+      {
         contentId: normalizedContentId,
         ...buildProviderIdentityOptions(normalizedType, normalizedContentId, meta),
-        contentType: normalizedType,
-        videoId: normalizedContentId,
-        positionMs: 100,
-        durationMs: 100,
-        updatedAt: watchedAt
-      });
-    }
+        title: meta?.name || options.title || normalizedContentId,
+        watchedAt
+      },
+      { skipTrackingWrite: true }
+    );
     detailWatchedEnrichmentService.invalidateCache(normalizedContentId);
     return true;
   },
@@ -359,26 +386,49 @@ export const watchedSeriesReconciliationService = {
       return false;
     }
     const normalizedType = String(options.contentType || "series").trim() || "series";
+    const profileId = ProfileManager.getActiveProfileId();
     const meta = await loadSeriesMeta(normalizedContentId, normalizedType, options.meta || null);
+    if (ProfileManager.getActiveProfileId() !== profileId) return false;
     const episodes = getReleasedMainEpisodes(meta || {});
     const providerOptions = buildProviderIdentityOptions(normalizedType, normalizedContentId, meta);
+    if (!episodes.length) {
+      // Catalog titles can still remove their stored episode history without
+      // metadata. A native series needs exact episode refs; never guess its ID.
+      if (normalizedContentId.startsWith("server:")) return false;
+      const accepted = await watchedItemsRepository.unmark(normalizedContentId, providerOptions);
+      if (accepted === false || ProfileManager.getActiveProfileId() !== profileId) return false;
+      await watchProgressRepository.removeProgress(normalizedContentId);
+      detailWatchedEnrichmentService.invalidateCache(normalizedContentId);
+      return ProfileManager.getActiveProfileId() === profileId;
+    }
 
-    // Keep the provider type explicit even when no local root marker exists.
-    // Otherwise the fallback target in watchedItemsRepository defaults to a
-    // movie and a remote-only Trakt series is never removed.
-    await watchedItemsRepository.unmark(normalizedContentId, providerOptions);
-    await watchProgressRepository.removeProgress(normalizedContentId);
+    let complete = true;
     for (const episode of episodes) {
-      await watchedItemsRepository.unmark(normalizedContentId, {
+      if (ProfileManager.getActiveProfileId() !== profileId) return false;
+      const accepted = await watchedItemsRepository.unmark(normalizedContentId, {
         ...providerOptions,
         season: episode.season,
         episode: episode.episode,
         videoId: episode.id,
-        skipTrackingWrite: true
+        released: episode.released
       });
+      if (accepted === false) {
+        complete = false;
+        continue;
+      }
       await watchProgressRepository.removeProgress(normalizedContentId, episode.id);
     }
+    if (ProfileManager.getActiveProfileId() !== profileId) return false;
+    // A series marker is a local aggregate, never a server item write. Keep
+    // failed episode entries intact while clearing the now-incomplete aggregate.
+    await watchedItemsRepository.unmark(normalizedContentId, {
+      ...providerOptions,
+      rootOnly: true,
+      skipTrackingWrite: !complete,
+      skipServerWrite: true
+    });
+    if (complete) await watchProgressRepository.removeProgress(normalizedContentId);
     detailWatchedEnrichmentService.invalidateCache(normalizedContentId);
-    return true;
+    return complete && ProfileManager.getActiveProfileId() === profileId;
   }
 };

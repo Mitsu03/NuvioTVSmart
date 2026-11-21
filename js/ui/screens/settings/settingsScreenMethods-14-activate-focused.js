@@ -136,6 +136,11 @@ export function createSettingsScreenMethods14() {
           await this.render({ refreshModel: false });
           return;
         }
+        if (this.activeSection === "contentDiscovery" && this.mediaServersView) {
+          this.actionMap.get("mediaServers:back")?.();
+          await this.render({ refreshModel: false });
+          return;
+        }
         if (this.focusZone === "sidebar") {
           Platform.exitApp();
         } else {
@@ -328,6 +333,11 @@ export function createSettingsScreenMethods14() {
       }
       if (this.optionDialog) {
         this.closeOptionDialog();
+        void this.render({ refreshModel: false });
+        return true;
+      }
+      if (this.activeSection === "contentDiscovery" && this.mediaServersView) {
+        this.actionMap.get("mediaServers:back")?.();
         void this.render({ refreshModel: false });
         return true;
       }

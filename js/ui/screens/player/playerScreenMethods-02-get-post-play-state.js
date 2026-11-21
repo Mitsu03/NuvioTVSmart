@@ -140,7 +140,8 @@ export function createPlayerScreenMethods02() {
         this.speedDialogVisible ||
         this.moreActionsVisible ||
         this.stillWatchingPromptVisible ||
-        this.parentalGuideVisible
+        this.parentalGuideVisible ||
+        Boolean(this.partyPanelVisible)
       );
     },
     buildPostPlayRecommendationSnapshot({ playbackEnded = this.postPlayPlaybackEnded } = {}) {

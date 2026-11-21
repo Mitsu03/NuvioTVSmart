@@ -20,7 +20,7 @@ import { PLUGIN_REPOSITORY_TYPES, isExecutableScraper, pluginSupportsType } from
 
 import { selectAutoPlayStream, isAutoPlayEffectivelyEnabled } from "../../../core/streams/streamAutoPlaySelector.js";
 
-import { orderSourceNames, orderStreamsByAddonOrder } from "../../../core/streams/streamOrdering.js";
+import { orderSourceNames, orderStreamsByAddonOrder, groupStreamsByProvider } from "../../../core/streams/streamOrdering.js";
 
 import { buildStreamResumeIdentity } from "../../../core/streams/streamResumeIdentity.js";
 
@@ -118,7 +118,7 @@ export function renderImageBadgeChip(badge = {}) {
   ].join("");
   return `
     <span class="stream-route-stream-badge image${filled ? " filled" : ""}"${style ? ` style="${escapeHtml(style)}"` : ""}>
-      <img src="${escapeHtml(safeImageUrl)}" alt="${escapeHtml(badge.name || "")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
+      <img ${Environment.isWebOS() ? `data-cached-badge-image="${escapeHtml(imageUrl)}"` : `src="${escapeHtml(safeImageUrl)}"`} alt="${escapeHtml(badge.name || "")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
     </span>
   `;
 }
@@ -193,7 +193,9 @@ export function getOrderedFilterNames(sourceChips = [], streams = []) {
 }
 
 export function sortStreamsByAddonOrder(streams = [], sourceChips = []) {
-  return orderStreamsByAddonOrder(streams, sourceChips, {
-    isDirectDebrid: (stream) => DebridStreamPresentation.isDirectDebrid(stream)
-  });
+  return groupStreamsByProvider(
+    orderStreamsByAddonOrder(streams, sourceChips, {
+      isDirectDebrid: (stream) => DebridStreamPresentation.isDirectDebrid(stream)
+    })
+  );
 }

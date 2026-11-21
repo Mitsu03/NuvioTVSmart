@@ -24,6 +24,8 @@ function normalizeItem(item = {}, profileId) {
     profileId: String(profileId || 1),
     contentId: String(item.contentId || ""),
     contentType: String(item.contentType || "movie"),
+    videoId: item.videoId || null,
+    released: item.released || null,
     // Keep tracker aliases with the local canonical ID so later unmark and
     // reconciliation calls can match the same title across catalog sources.
     imdbId: item.imdbId || item.imdb_id || ids.imdb || null,

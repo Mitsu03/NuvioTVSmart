@@ -1,4 +1,5 @@
 import { createProfileScopedStore } from "./profileScopedStore.js";
+import { ProfileManager } from "../../core/profile/profileManager.js";
 import {
   SUBTITLE_VERTICAL_OFFSET_CONTRACT,
   SUBTITLE_VERTICAL_OFFSET_DEFAULT,
@@ -8,6 +9,25 @@ import {
   SUBTITLE_TEXT_OPACITY_DEFAULT,
   normalizeSubtitleTextOpacity
 } from "../../core/player/subtitleTextOpacity.js";
+import {
+  SOURCE_FALLBACK_MAX_SOURCES_DEFAULT,
+  SOURCE_FALLBACK_MAX_SOURCES_MAX,
+  SOURCE_FALLBACK_MAX_SOURCES_MIN,
+  SOURCE_STARTUP_TIMEOUT_SECONDS_DEFAULT,
+  SOURCE_STARTUP_TIMEOUT_SECONDS_MAX,
+  SOURCE_STARTUP_TIMEOUT_SECONDS_MIN,
+  SOURCE_STARTUP_TIMEOUT_SECONDS_STEP
+} from "../../core/player/sourceFallback.js";
+import {
+  SUBTITLE_APPEARANCE_DEFAULTS,
+  normalizeSubtitleAppearance
+} from "../../core/player/subtitleAppearance.js";
+import { AUTO_SYNC_TOLERANCE_OPTIONS_MS } from "../../core/player/subtitleAutoSyncEngine.js";
+import {
+  HDR_BRIGHTNESS_DEFAULT,
+  normalizeHdrBrightness,
+  normalizeHdrTextColor
+} from "../../core/player/hdrSubtitleStyle.js";
 
 const KEY = "playerSettings";
 
@@ -17,7 +37,6 @@ export const DEFAULT_POST_PLAY_MOVIE_THRESHOLD_PERCENT = 90;
 
 const DEFAULTS = {
   autoplayNextEpisode: false,
-  nextEpisodeCountdownEnabled: true,
   postPlayRecommendationsEnabled: true,
   postPlayMovieThresholdPercent: DEFAULT_POST_PLAY_MOVIE_THRESHOLD_PERCENT,
   // Legacy Web-only switch. Subtitle startup is controlled by the preferred
@@ -32,24 +51,26 @@ const DEFAULTS = {
   skipIntroEnabled: true,
   loadingOverlayEnabled: true,
   showPlayerLoadingStatus: true,
-  minimalBufferingUiEnabled: false,
   pauseOverlayEnabled: true,
   parentalGuideEnabled: true,
   autoSkipSegmentTypes: [],
-  addonSubtitleStartupMode: "ALL_SUBTITLES",
-  addonSubtitleStartupModeAutoPreferred: false,
   nextEpisodeThresholdMode: "PERCENTAGE",
   nextEpisodeThresholdPercent: 99,
   nextEpisodeThresholdMinutesBeforeEnd: 2,
   stillWatchingEnabled: false,
   stillWatchingEpisodeThreshold: 3,
   osdClockEnabled: true,
+  // Android "Show Chapters" (exo_chapters_enabled): marks, chapter title and the
+  // chapters panel. Chapters still feed skip intro when it is off.
+  chaptersEnabled: false,
+  chapterTitleEnabled: true,
   subtitleRenderMode: "native",
   subtitleStyle: {
     fontSize: 100,
     textColor: "#FFFFFF",
     textOpacity: SUBTITLE_TEXT_OPACITY_DEFAULT,
     bold: false,
+    stripSdh: false,
     outlineEnabled: true,
     outlineColor: "#000000",
     backgroundColor: "#00000000",
@@ -57,14 +78,19 @@ const DEFAULTS = {
     verticalOffsetContract: SUBTITLE_VERTICAL_OFFSET_CONTRACT,
     preferredLanguage: "en",
     secondaryPreferredLanguage: "off",
-    useForcedSubtitles: false,
-    showOnlyPreferredLanguages: false
+    useForcedSubtitles: true,
+    showOnlyPreferredLanguages: false,
+    autoSyncEnabled: true,
+    autoSyncToleranceMs: 0,
+    autoSyncThorough: true,
+    hdrStyleEnabled: false,
+    hdrTextColor: "#FFFFFF",
+    hdrBrightness: HDR_BRIGHTNESS_DEFAULT,
+    hdrDimPlayerControls: false,
+    ...SUBTITLE_APPEARANCE_DEFAULTS
   },
   audioAmplificationDb: 0,
   persistAudioAmplification: false,
-  // Legacy combined override from 0.3.14. Kept only so the device-wide,
-  // per-codec webOS compatibility store can migrate an existing preference.
-  forceDtsTrueHdAudio: false,
   // Auto stream selection (matches the Android TV app). When the mode is not
   // MANUAL, pressing play auto-selects a stream and plays it after a countdown.
   streamAutoPlayMode: "MANUAL",
@@ -76,8 +102,24 @@ const DEFAULTS = {
   streamAutoPlayReuseBingeGroup: false,
   streamReuseLastLinkEnabled: false,
   streamReuseLastLinkCacheHours: 24,
-  streamAutoPlayTimeoutSeconds: 3
+  streamAutoPlayTimeoutSeconds: 3,
+  // Android "Fallback to next matching source on failure" (device-local, not synced).
+  streamAutoPlayFallbackOnFailure: false,
+  streamAutoPlayFallbackMaxSources: SOURCE_FALLBACK_MAX_SOURCES_DEFAULT,
+  streamAutoPlayFallbackStartupTimeoutSeconds: SOURCE_STARTUP_TIMEOUT_SECONDS_DEFAULT
 };
+
+function normalizeIntInRange(value, min, max, fallback, step = 1) {
+  const number = Math.trunc(Number(value));
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+  const clamped = Math.min(max, Math.max(min, number));
+  return min + Math.round((clamped - min) / step) * step;
+}
+
+/** The stored subtitle style defaults, for "Reset Appearance". */
+export const DEFAULT_SUBTITLE_STYLE = Object.freeze({ ...DEFAULTS.subtitleStyle });
 
 const STREAM_AUTO_PLAY_MODES = ["MANUAL", "FIRST_STREAM", "REGEX_MATCH"];
 const STREAM_AUTO_PLAY_SOURCES = ["ALL_SOURCES", "INSTALLED_ADDONS_ONLY", "ENABLED_PLUGINS_ONLY"];
@@ -226,7 +268,15 @@ function normalizeSelectableSubtitleLanguageCode(language, fallback = "off") {
 }
 
 export function normalizePlayerSettings(settings = {}) {
-  const { subtitleDelayMs: _ignoredSubtitleDelayMs, ...persistentSettings } = settings || {};
+  const {
+    subtitleDelayMs: _ignoredSubtitleDelayMs,
+    nextEpisodeCountdownEnabled: _removedCountdown,
+    minimalBufferingUiEnabled: _removedBufferingUi,
+    addonSubtitleStartupMode: _removedSubtitleStartup,
+    addonSubtitleStartupModeAutoPreferred: _removedAutoPreferred,
+    forceDtsTrueHdAudio: _removedAudioOverride,
+    ...persistentSettings
+  } = settings || {};
   const subtitleStyle = {
     ...DEFAULTS.subtitleStyle,
     ...(persistentSettings.subtitleStyle || {})
@@ -244,6 +294,7 @@ export function normalizePlayerSettings(settings = {}) {
   );
   subtitleStyle.verticalOffsetContract = SUBTITLE_VERTICAL_OFFSET_CONTRACT;
   subtitleStyle.textOpacity = normalizeSubtitleTextOpacity(subtitleStyle.textOpacity);
+  Object.assign(subtitleStyle, normalizeSubtitleAppearance(subtitleStyle));
   let preferredLanguage = normalizeSelectableSubtitleLanguageCode(
     subtitleStyle.preferredLanguage ?? persistentSettings.subtitleLanguage,
     DEFAULTS.subtitleStyle.preferredLanguage
@@ -280,9 +331,6 @@ export function normalizePlayerSettings(settings = {}) {
   return {
     ...DEFAULTS,
     ...persistentSettings,
-    nextEpisodeCountdownEnabled: Boolean(
-      persistentSettings.nextEpisodeCountdownEnabled ?? DEFAULTS.nextEpisodeCountdownEnabled
-    ),
     postPlayRecommendationsEnabled: Boolean(
       persistentSettings.postPlayRecommendationsEnabled ?? DEFAULTS.postPlayRecommendationsEnabled
     ),
@@ -296,9 +344,6 @@ export function normalizePlayerSettings(settings = {}) {
     ),
     loadingOverlayEnabled: persistentSettings.loadingOverlayEnabled !== false,
     showPlayerLoadingStatus: persistentSettings.showPlayerLoadingStatus !== false,
-    minimalBufferingUiEnabled: Boolean(
-      persistentSettings.minimalBufferingUiEnabled ?? DEFAULTS.minimalBufferingUiEnabled
-    ),
     pauseOverlayEnabled: persistentSettings.pauseOverlayEnabled !== false,
     parentalGuideEnabled: persistentSettings.parentalGuideEnabled !== false,
     autoSkipSegmentTypes: [
@@ -311,14 +356,6 @@ export function normalizePlayerSettings(settings = {}) {
           .filter((entry) => ["intro", "recap", "outro", "movie-credits"].includes(entry))
       )
     ],
-    addonSubtitleStartupMode: ["FAST_STARTUP", "PREFERRED_ONLY", "ALL_SUBTITLES"].includes(
-      String(persistentSettings.addonSubtitleStartupMode || "").toUpperCase()
-    )
-      ? String(persistentSettings.addonSubtitleStartupMode).toUpperCase()
-      : "ALL_SUBTITLES",
-    addonSubtitleStartupModeAutoPreferred: Boolean(
-      persistentSettings.addonSubtitleStartupModeAutoPreferred
-    ),
     streamAutoPlayMode: normalizeStreamAutoPlayMode(
       persistentSettings.streamAutoPlayMode ?? DEFAULTS.streamAutoPlayMode
     ),
@@ -345,6 +382,20 @@ export function normalizePlayerSettings(settings = {}) {
     streamReuseLastLinkCacheHours: normalizeReuseLastLinkCacheHours(
       persistentSettings.streamReuseLastLinkCacheHours
     ),
+    streamAutoPlayFallbackOnFailure: persistentSettings.streamAutoPlayFallbackOnFailure === true,
+    streamAutoPlayFallbackMaxSources: normalizeIntInRange(
+      persistentSettings.streamAutoPlayFallbackMaxSources,
+      SOURCE_FALLBACK_MAX_SOURCES_MIN,
+      SOURCE_FALLBACK_MAX_SOURCES_MAX,
+      SOURCE_FALLBACK_MAX_SOURCES_DEFAULT
+    ),
+    streamAutoPlayFallbackStartupTimeoutSeconds: normalizeIntInRange(
+      persistentSettings.streamAutoPlayFallbackStartupTimeoutSeconds,
+      SOURCE_STARTUP_TIMEOUT_SECONDS_MIN,
+      SOURCE_STARTUP_TIMEOUT_SECONDS_MAX,
+      SOURCE_STARTUP_TIMEOUT_SECONDS_DEFAULT,
+      SOURCE_STARTUP_TIMEOUT_SECONDS_STEP
+    ),
     streamAutoPlayTimeoutSeconds: normalizeStreamAutoPlayTimeout(
       persistentSettings.streamAutoPlayTimeoutSeconds
     ),
@@ -369,6 +420,10 @@ export function normalizePlayerSettings(settings = {}) {
       settings.stillWatchingEpisodeThreshold ?? DEFAULTS.stillWatchingEpisodeThreshold
     ),
     osdClockEnabled: Boolean(persistentSettings.osdClockEnabled ?? DEFAULTS.osdClockEnabled),
+    chaptersEnabled: Boolean(persistentSettings.chaptersEnabled ?? DEFAULTS.chaptersEnabled),
+    chapterTitleEnabled: Boolean(
+      persistentSettings.chapterTitleEnabled ?? DEFAULTS.chapterTitleEnabled
+    ),
     subtitlesEnabled: true,
     secondaryPreferredAudioLanguage: (() => {
       const normalized = String(
@@ -385,10 +440,22 @@ export function normalizePlayerSettings(settings = {}) {
     secondarySubtitleLanguage: secondaryPreferredLanguage,
     subtitleStyle: {
       ...subtitleStyle,
+      stripSdh: subtitleStyle.stripSdh === true,
       preferredLanguage,
       secondaryPreferredLanguage,
       useForcedSubtitles,
-      showOnlyPreferredLanguages: Boolean(subtitleStyle.showOnlyPreferredLanguages)
+      showOnlyPreferredLanguages: Boolean(subtitleStyle.showOnlyPreferredLanguages),
+      autoSyncEnabled: subtitleStyle.autoSyncEnabled === true,
+      autoSyncToleranceMs: AUTO_SYNC_TOLERANCE_OPTIONS_MS.includes(
+        Math.trunc(Number(subtitleStyle.autoSyncToleranceMs))
+      )
+        ? Math.trunc(Number(subtitleStyle.autoSyncToleranceMs))
+        : 0,
+      autoSyncThorough: subtitleStyle.autoSyncThorough !== false,
+      hdrStyleEnabled: subtitleStyle.hdrStyleEnabled === true,
+      hdrTextColor: normalizeHdrTextColor(subtitleStyle.hdrTextColor),
+      hdrBrightness: normalizeHdrBrightness(subtitleStyle.hdrBrightness),
+      hdrDimPlayerControls: subtitleStyle.hdrDimPlayerControls === true
     }
   };
 }
@@ -409,17 +476,54 @@ const store = createProfileScopedStore({
   }
 });
 
+// Playback ticks read these settings repeatedly. Keep only the last normalized
+// snapshot, checking the persisted value on every read so cloud updates, profile
+// changes and storage clears remain visible without an invalidation protocol.
+let cachedRead = null;
+
+function getPlayerSettingsForProfile(profileId) {
+  const normalizedProfileId =
+    String(profileId ?? ProfileManager.getActiveProfileId() ?? "1").trim() || "1";
+  let raw;
+  try {
+    raw = localStorage.getItem(KEY);
+  } catch (_) {
+    cachedRead = null;
+    return store.getForProfile(normalizedProfileId);
+  }
+  if (cachedRead && cachedRead.profileId === normalizedProfileId && cachedRead.raw === raw) {
+    // Callers can mutate nested settings without changing subsequent reads.
+    return JSON.parse(cachedRead.value);
+  }
+  cachedRead = null;
+  const value = store.getForProfile(normalizedProfileId);
+  try {
+    // The normal read may migrate/normalize storage or seed a missing profile.
+    const persisted = localStorage.getItem(KEY);
+    const serializedValue = JSON.stringify(value);
+    if (
+      persisted !== null &&
+      JSON.stringify(JSON.parse(persisted)?.profiles?.[normalizedProfileId]) === serializedValue
+    ) {
+      cachedRead = { profileId: normalizedProfileId, raw: persisted, value: serializedValue };
+    }
+  } catch (_) {
+    // Storage may be unavailable; retain the existing uncached behavior.
+  }
+  return value;
+}
+
 export const PlayerSettingsStore = {
   getDefaults() {
     return normalizePlayerSettings({});
   },
 
   getForProfile(profileId) {
-    return store.getForProfile(profileId);
+    return getPlayerSettingsForProfile(profileId);
   },
 
   get() {
-    return store.get();
+    return getPlayerSettingsForProfile();
   },
 
   replaceForProfile(profileId, nextValue, options = {}) {

@@ -57,6 +57,51 @@ export function parseMdbListRottenTomatoesPayload(payload = {}) {
   };
 }
 
+/** Same provider aliases, bounds and Letterboxd score conversion as Android's DTO. */
+export function parseMdbListMediaRatings(payload = {}) {
+  const values = {};
+  const aliases = {
+    popcorn: "audience",
+    audience: "audience",
+    tomatoesaudience: "audience",
+    myanimelist: "mal",
+    mal: "mal"
+  };
+  const supported = [
+    "imdb",
+    "trakt",
+    "tmdb",
+    "letterboxd",
+    "tomatoes",
+    "audience",
+    "metacritic",
+    "mal"
+  ];
+  for (const rating of Array.isArray(payload.ratings) ? payload.ratings : []) {
+    const source = aliases[rating?.source] || rating?.source;
+    if (
+      !supported.includes(source) ||
+      Object.prototype.hasOwnProperty.call(values, source) ||
+      rating?.value == null ||
+      String(rating.value).trim() === ""
+    )
+      continue;
+    const raw = Number(rating.value);
+    if (!Number.isFinite(raw) || raw < 0) continue;
+    const value = source === "letterboxd" && rating.score != null ? Number(rating.score) / 20 : raw;
+    const maximum = ["imdb", "mal"].includes(source) ? 10 : source === "letterboxd" ? 5 : 100;
+    if (Number.isFinite(value) && value >= 0 && value <= maximum) values[source] = value;
+  }
+  const keywords = new Set(
+    (Array.isArray(payload.keywords) ? payload.keywords : []).map(normalizeKeywordName)
+  );
+  return {
+    ...Object.fromEntries(supported.map((provider) => [provider, values[provider] ?? null])),
+    tomatoesCertified: values.tomatoes != null && keywords.has("certified-fresh"),
+    audienceCertified: values.audience != null && keywords.has("certified-hot")
+  };
+}
+
 export function getMdbListRatingStatus(provider, rating, certified = false) {
   const value = validRatingValue(rating);
   if (value == null) {

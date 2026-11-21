@@ -10,10 +10,34 @@ var SUPABASE_PROXY_PATH = require("./supabaseProxy").SUPABASE_PROXY_PATH;
 var bitmapSubtitles = require("./bitmapSubtitles");
 var getBitmapSubtitleWindow = bitmapSubtitles.getBitmapSubtitleWindow;
 var getEmbeddedTextSubtitleWindow = bitmapSubtitles.getEmbeddedTextSubtitleWindow;
+var getEmbeddedTextSubtitleTimeline = bitmapSubtitles.getEmbeddedTextSubtitleTimeline;
 var prepareBitmapSubtitleSource = bitmapSubtitles.prepareBitmapSubtitleSource;
 
 var RUNTIME_PATH = path.resolve(__dirname, "..", "runtime", "media-http.cjs");
 var RUNTIME_RESTART_COOLDOWN_MS = 1500;
+
+// The embedded-track reader understands Matroska and MP4 only. These containers
+// can never answer: reject them before booting the local runtime. Unknown
+// extensions still go through (3GP/F4V share the MP4 box structure).
+// Keep in sync with js/data/repository/embeddedTrackSupport.js.
+var UNSUPPORTED_TRACK_CONTAINER_PATTERN =
+  /\.(avi|divx|wmv|asf|mpg|mpeg|mpe|m1v|m2v|vob|flv|ogv|rm|rmvb|ts|m2ts|mts|mxf|wtv)$/i;
+
+function getTrackContainerName(mediaUrl, filename) {
+  for (var index = 0; index < 2; index += 1) {
+    var name = String((index === 0 ? filename : mediaUrl) || "")
+      .trim()
+      .split(/[?#]/)[0];
+    if (/\.[a-z0-9]{2,5}$/i.test(name)) {
+      return name;
+    }
+  }
+  return "";
+}
+
+function isUnsupportedTrackContainer(mediaUrl, filename) {
+  return UNSUPPORTED_TRACK_CONTAINER_PATTERN.test(getTrackContainerName(mediaUrl, filename));
+}
 
 function createService() {
   try {
@@ -365,9 +389,23 @@ function registerPlaybackServiceKeepAliveCommands() {
 
 function registerTracksCommand() {
   service.register("tracks", function (message) {
-    var mediaUrl = String(getMessagePayload(message).url || "").trim();
+    var payload = getMessagePayload(message);
+    var mediaUrl = String(payload.url || "").trim();
+    var filename = String(payload.filename || "").trim();
     if (!mediaUrl) {
       respond(message, buildErrorPayload("Missing required parameter: url"));
+      return;
+    }
+
+    if (isUnsupportedTrackContainer(mediaUrl, filename)) {
+      respond(
+        message,
+        buildErrorPayload("Track discovery is not supported for this file type", {
+          statusCode: 415,
+          terminal: true,
+          unsupportedContainer: true
+        })
+      );
       return;
     }
 
@@ -539,6 +577,33 @@ function registerEmbeddedTextSubtitleCommand() {
           buildErrorPayload(error, {
             embeddedTextSubtitle: true,
             errorCode: String((error && error.code) || "EMBEDDED_TEXT_SUBTITLE_FAILED"),
+            errorDetails: (error && error.details) || null
+          })
+        );
+      });
+  });
+}
+
+function registerEmbeddedTextSubtitleTimelineCommand() {
+  service.register("embeddedSubtitleTimeline", function (message) {
+    var payload = getMessagePayload(message);
+    getEmbeddedTextSubtitleTimeline({
+      url: payload.url,
+      trackNumber: payload.trackNumber,
+      trackOrdinal: payload.trackOrdinal
+    })
+      .then(function (result) {
+        respond(message, Object.assign(buildBasePayload(), result, { returnValue: true }));
+      })
+      .catch(function (error) {
+        if (!error || error.code !== "REQUEST_SUPERSEDED") {
+          console.error("[" + SERVICE_ID + "] embedded text subtitle timeline failed:", error);
+        }
+        respond(
+          message,
+          buildErrorPayload(error, {
+            embeddedTextSubtitle: true,
+            errorCode: String((error && error.code) || "EMBEDDED_TEXT_TIMELINE_FAILED"),
             errorDetails: (error && error.details) || null
           })
         );
@@ -1517,5 +1582,23 @@ registerTracksCommand();
 registerSubtitleTextCommand();
 registerBitmapSubtitleCommand();
 registerEmbeddedTextSubtitleCommand();
+registerEmbeddedTextSubtitleTimelineCommand();
 registerTorrentProxyCommands();
 registerEngineFsDiagnosticCommand();
+
+var audioTranscode = require("./audioTranscode");
+service.register("audioTranscodeCreate", function (message) {
+  ensureRuntimeStarted();
+  audioTranscode.createSession(message.payload || {}).then(
+    function (result) {
+      message.respond(Object.assign({ returnValue: true }, result));
+    },
+    function () {
+      message.respond({ returnValue: false, errorText: "Audio conversion unavailable" });
+    }
+  );
+});
+service.register("audioTranscodeStop", function (message) {
+  audioTranscode.stop((message.payload || {}).id);
+  message.respond({ returnValue: true });
+});

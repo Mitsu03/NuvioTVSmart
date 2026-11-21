@@ -37,6 +37,8 @@ const WESTERN_LANGUAGES = new Set([
   "por",
   "pt",
   "spa",
+  "spn",
+  "esp",
   "es",
   "fra",
   "fre",

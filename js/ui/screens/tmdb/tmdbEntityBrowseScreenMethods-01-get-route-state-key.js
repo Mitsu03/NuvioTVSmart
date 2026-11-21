@@ -1,3 +1,4 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./tmdbEntityBrowseScreen.js";
 
@@ -247,7 +248,7 @@ export function createTmdbEntityBrowseScreenMethods01() {
     },
     renderRail(rail) {
       const railKey = String(rail?.key || `${rail?.mediaType || "movie"}:${rail?.railType || "popular"}`);
-      const items = Array.isArray(rail?.items) ? rail.items : [];
+      const items = (Array.isArray(rail?.items) ? rail.items : []).map((item) => customPosterForItem(item, "details"));
       const cards = items
         .map((item, index) => {
           const poster = String(item?.poster || "").trim();
@@ -269,7 +270,7 @@ export function createTmdbEntityBrowseScreenMethods01() {
                 <div class="tmdb-entity-card-poster-wrap">
                   ${
                     poster
-                      ? `<img class="tmdb-entity-card-poster" src="${escapeHtml(poster)}" alt="${escapeHtml(title)}" loading="lazy" decoding="async" onerror="this.hidden=true; this.nextElementSibling.hidden=false" />`
+                      ? `<img class="tmdb-entity-card-poster" ${posterFallbackAttributes(item)} src="${escapeHtml(poster)}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true; this.nextElementSibling.hidden=false" />`
                       : ""
                   }
                   <div class="tmdb-entity-card-placeholder"${poster ? " hidden" : ""}></div>

@@ -90,10 +90,6 @@ function mapParentsGuide(categories) {
     frightening: resolveSeverity(categoryMap.get("FRIGHTENING_INTENSE_SCENES"))
   };
 
-  if (!Object.values(parentalGuide).some(Boolean)) {
-    return null;
-  }
-
   return {
     hasData: true,
     parentalGuide
@@ -114,7 +110,9 @@ async function getGuide(imdbId) {
     `${baseUrl}titles/${encodeURIComponent(normalizedImdbId)}/parentsGuide`
   );
   const payload = mapParentsGuide(result?.parentsGuide);
-  CACHE.set(cacheKey, payload);
+  // Android caches successful category responses, including an empty set of warnings.
+  // Failed requests must remain retryable on the next playback.
+  if (payload) CACHE.set(cacheKey, payload);
   return payload;
 }
 

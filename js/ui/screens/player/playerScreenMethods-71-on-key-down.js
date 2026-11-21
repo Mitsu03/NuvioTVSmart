@@ -1,3 +1,5 @@
+import { isStreamInfoKey } from "./streamInfoOverlay.js";
+import { shouldExitPostPlayOnLongBack } from "../../../core/player/postPlayBackPolicy.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
@@ -6,6 +8,9 @@ export function createPlayerScreenMethods71() {
 
   return {
     async onKeyDown(event) {
+      if (this.episodeOptionsDialogVisible) {
+        return;
+      }
       const keyCode = Number(event?.keyCode || 0);
       const isBackKey = isBackEvent(event);
       if (this.isStartupErrorVisible()) {
@@ -18,10 +23,49 @@ export function createPlayerScreenMethods71() {
         }
         return;
       }
+      if (this.streamInfoVisible) {
+        event?.preventDefault?.();
+        event?.stopImmediatePropagation?.();
+        if (!event?.repeat && (isBackKey || isStreamInfoKey(event) || isSelectKeyCode(keyCode))) this.closeStreamInfo();
+        else if (keyCode === 38 || keyCode === 40) this.streamInfoOverlay.scrollTop += keyCode === 40 ? 100 : -100;
+        return;
+      }
+      if (isStreamInfoKey(event) && !event?.repeat) {
+        event?.preventDefault?.();
+        event?.stopImmediatePropagation?.();
+        this.showStreamInfo();
+        return;
+      }
+      if (this.chaptersPanelVisible) {
+        if (this.handleChaptersPanelKey(event)) {
+          return;
+        }
+        if (!isBackKey) {
+          event?.preventDefault?.();
+          event?.stopPropagation?.();
+          return;
+        }
+      }
       if (isBackKey) {
         event?.preventDefault?.();
         event?.stopPropagation?.();
         event?.stopImmediatePropagation?.();
+        if (
+          shouldExitPostPlayOnLongBack({
+            postPlayVisible: this.isPostPlayVisible?.() === true,
+            isBack: true,
+            repeat: Boolean(event?.repeat),
+            modalOpen: Boolean(this.postPlayManualDialogVisible || this.postPlaySynopsisVisible)
+          })
+        ) {
+          this.postPlayNaturalEndPending = false;
+          this.postPlayPlaybackEnded = false;
+          this.postPlayRecommendationController?.stop?.();
+          if (!this.navigateBackToStreamScreen()) {
+            Router.back();
+          }
+          return;
+        }
         this.consumeBackRequest();
         return;
       }
@@ -44,6 +88,9 @@ export function createPlayerScreenMethods71() {
           return;
         }
         this.handlePostPlayKey(event);
+        return;
+      }
+      if (this.partyPanelVisible && this.handlePartyPanelKey(event)) {
         return;
       }
       if (this.nextEpisodeBackExitArmed) {
@@ -245,12 +292,12 @@ export function createPlayerScreenMethods71() {
       if (!this.controlsVisible) {
         if (keyCode === 37) {
           this.autoHideControlsAfterSeek = false;
-          this.beginSeekPreview(-1, Boolean(event?.repeat));
+          this.beginSeekPreview(-1, Boolean(event?.repeat), true);
           return;
         }
         if (keyCode === 39) {
           this.autoHideControlsAfterSeek = false;
-          this.beginSeekPreview(1, Boolean(event?.repeat));
+          this.beginSeekPreview(1, Boolean(event?.repeat), true);
           return;
         }
         if (keyCode === 38) {
@@ -296,11 +343,11 @@ export function createPlayerScreenMethods71() {
 
       if (this.controlFocusZone === "progress") {
         if (keyCode === 37) {
-          this.beginSeekPreview(-1, Boolean(event?.repeat));
+          this.beginSeekPreview(-1, Boolean(event?.repeat), true);
           return;
         }
         if (keyCode === 39) {
-          this.beginSeekPreview(1, Boolean(event?.repeat));
+          this.beginSeekPreview(1, Boolean(event?.repeat), true);
           return;
         }
         if (keyCode === 38) {
@@ -337,7 +384,11 @@ export function createPlayerScreenMethods71() {
         return;
       }
       if (keyCode === 38) {
-        this.focusProgressBar();
+        if (this.isLivePlayback()) {
+          if (!this.focusSkipIntroButton()) this.setControlsVisible(false);
+        } else {
+          this.focusProgressBar();
+        }
         return;
       }
       if (keyCode === 40) {

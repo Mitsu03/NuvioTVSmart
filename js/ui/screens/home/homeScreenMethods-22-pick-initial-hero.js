@@ -22,12 +22,7 @@ export function createHomeScreenMethods22() {
   return {
     pickInitialHero() {
       if (this.layoutMode === "modern" && this.layoutPrefs?.continueWatchingEnabled !== false) {
-        if (
-          this.continueWatchingLoading &&
-          Array.isArray(this.continueWatching) &&
-          this.continueWatching.length &&
-          !this.continueWatchingDisplay?.length
-        ) {
+        if (this.continueWatchingLoading && !this.continueWatchingInitialResolved && !this.continueWatchingDisplay?.length) {
           return null;
         }
         const continueHero = normalizeContinueWatchingItem(this.continueWatchingDisplay?.[0] || null);
@@ -66,17 +61,18 @@ export function createHomeScreenMethods22() {
           batchDescriptors.map(async (catalog) => {
             const result = this.filterUnreleasedResult(
               await withTimeout(
-                catalogRepository.getCatalog({
-                  addonBaseUrl: catalog.addonBaseUrl,
-                  addonId: catalog.addonId,
-                  addonName: catalog.addonName,
-                  catalogId: catalog.catalogId,
-                  catalogName: catalog.catalogName,
-                  type: catalog.type,
-                  skip: 0,
-                  skipStep: catalog.skipStep,
-                  supportsSkip: catalog.supportsSkip !== false
-                }),
+                options.prefetchedResults?.get(catalog) ??
+                  catalogRepository.getCatalog({
+                    addonBaseUrl: catalog.addonBaseUrl,
+                    addonId: catalog.addonId,
+                    addonName: catalog.addonName,
+                    catalogId: catalog.catalogId,
+                    catalogName: catalog.catalogName,
+                    type: catalog.type,
+                    skip: 0,
+                    skipStep: catalog.skipStep,
+                    supportsSkip: catalog.supportsSkip !== false
+                  }),
                 timeoutMs,
                 { status: "error", message: "timeout" }
               )

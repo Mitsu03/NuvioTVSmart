@@ -4,6 +4,7 @@ import * as internals from "./playerScreenContext.js";
 export function createPlayerScreenMethods67() {
   const {
     PlayerController,
+    PlayerSettingsStore,
     streamRepository,
     StreamBadgeSettingsStore,
     Router,
@@ -227,6 +228,9 @@ export function createPlayerScreenMethods67() {
     },
     hideEpisodePanel() {
       streamRepository.setLocalPluginSearchPaused(true);
+      this.clearEpisodePanelLongPressTimer?.();
+      this.episodePanelPendingSelect = false;
+      this.closeEpisodeOptionsDialog?.();
       this.episodePanelVisible = false;
       this.episodePanelStreamLoadToken = Number(this.episodePanelStreamLoadToken || 0) + 1;
       const panel = this.uiRefs?.root?.querySelector("#episodeSidePanel");
@@ -241,7 +245,23 @@ export function createPlayerScreenMethods67() {
       this.updateModalBackdrop();
       this.resetControlsAutoHide();
     },
-    async playEpisodeFromPanel(selectedStream = null) {
+    /**
+     * Android isEpisodeAutoPlaySearching: while an episode picked in the panel finds its
+     * source, the loading overlay ("Finding stream source") replaces the panel. Without
+     * the loading overlay the panel stays, as on Android.
+     */
+    setEpisodeAutoPlaySearching(searching) {
+      const active = Boolean(searching) && PlayerSettingsStore.get().loadingOverlayEnabled !== false;
+      if (!active && !this.episodeAutoPlaySearching) {
+        return;
+      }
+      this.episodeAutoPlaySearching = active;
+      this.uiRefs?.root?.querySelector("#episodeSidePanel")?.classList.toggle("is-autoplay-searching", active);
+      this.loadingTorrentStatus = active ? t("stream_finding_source", {}, "Finding stream source") : "";
+      this.updateLoadingVisibility();
+      this.syncLoadingOverlayStatus();
+    },
+    async playEpisodeFromPanel(selectedStream = null, { manualSelection = false } = {}) {
       if (this.switchingEpisode || !this.episodes.length) {
         return;
       }
@@ -250,11 +270,21 @@ export function createPlayerScreenMethods67() {
         return;
       }
       streamRepository.setLocalPluginSearchPaused(true);
+      const settings = PlayerSettingsStore.get() || {};
+      const autoPlayMode = String(settings.streamAutoPlayMode || "MANUAL").toUpperCase();
       if (!selectedStream && this.episodePanelMode !== "streams") {
-        await this.openEpisodeStreamsView({ forceReload: true });
-        return;
+        // Android autoplays the chosen episode when stream auto-play is not manual;
+        // just like the next-episode flow, load the sources (cache included) and pick
+        // the best one without opening the picker.
+        if (manualSelection || autoPlayMode === "MANUAL" || selected.available === false) {
+          await this.openEpisodeStreamsView();
+          return;
+        }
       }
       this.switchingEpisode = true;
+      if (!selectedStream) {
+        this.setEpisodeAutoPlaySearching(true);
+      }
       try {
         const itemType = this.params?.itemType || "series";
         const streamItems = selectedStream
@@ -264,9 +294,21 @@ export function createPlayerScreenMethods67() {
               episode: selected.episode
             });
         if (!streamItems.length) {
+          if (!selectedStream) {
+            // Android opens the stream picker when the search finds nothing to play.
+            this.setEpisodeAutoPlaySearching(false);
+            this.switchingEpisode = false;
+            await this.openEpisodeStreamsView();
+          }
           return;
         }
-        const bestStreamCandidate = selectedStream || this.selectBestStreamCandidate(streamItems) || streamItems[0];
+        const bestStreamCandidate =
+          selectedStream ||
+          (await this.selectNextEpisodeStreamByAutoPlayPolicy?.(streamItems, settings, {
+            nextEpisode: selected
+          })) ||
+          this.selectBestStreamCandidate(streamItems) ||
+          streamItems[0];
         const bestStream = streamDirectPlaybackUrl(bestStreamCandidate) || null;
         const nextEpisode = this.episodes[this.episodePanelIndex + 1] || null;
         await PlayerController.flushCurrentProgress({ allowCloudSync: false });
@@ -298,6 +340,8 @@ export function createPlayerScreenMethods67() {
             streamCandidates: streamItems,
             preferredStreamId: bestStreamCandidate.id || null,
             playbackSourceContext: this.getPlaybackSourceContext(bestStreamCandidate),
+            // Only a source auto selection picked falls back; a stream picked in the panel does not.
+            autoPlayNav: !selectedStream,
             returnToStreamOnBack: false,
             returnHomeOnBack: this.buildDetailRouteParamsFromPlayer().returnHomeOnBack,
             nextEpisodeVideoId: nextEpisode?.id || null,
@@ -313,6 +357,7 @@ export function createPlayerScreenMethods67() {
         );
       } finally {
         this.switchingEpisode = false;
+        this.setEpisodeAutoPlaySearching(false);
       }
     }
   };

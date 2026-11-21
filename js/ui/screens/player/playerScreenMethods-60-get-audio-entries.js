@@ -26,7 +26,13 @@ export function createPlayerScreenMethods60() {
             ? PlayerController.getSelectedAvPlayAudioTrackIndex()
             : -1;
         entries = avplayAudioTracks.map((track, index) => {
-          const mergedTrack = this.mergeAvPlayAudioTrackMetadata(track, index);
+          let mergedTrack = this.mergeAvPlayAudioTrackMetadata(track, index);
+          if (Environment.isTizen() && this.manifestAudioTracks.length) {
+            // AVPlay exposes manifest names/languages only from extra_info; when
+            // they are absent, the parsed HLS/DASH rendition list is the same
+            // metadata Android TV reads from the manifest.
+            mergedTrack = this.mergeManifestAudioTrackMetadata(mergedTrack, index, avplayAudioTracks.length);
+          }
           const support = this.isTizenDashAudioSwitchingUnsupported()
             ? { supported: false, unsupportedReason: "tizen-dash-audio" }
             : getAudioTrackSupportState(mergedTrack);
@@ -37,10 +43,13 @@ export function createPlayerScreenMethods60() {
             id: `audio-avplay-${normalizedTrackIndex}`,
             label: display.label,
             secondary: display.secondary,
+            languageText: display.languageText,
+            metadata: display.metadata,
             selected:
               normalizedTrackIndex === selectedAvPlayAudioTrack ||
               (selectedAvPlayAudioTrack < 0 && normalizedTrackIndex === this.selectedAudioTrackIndex),
             supported: support.supported,
+            canTryAudioConversion: Boolean(support.canTryAudioConversion),
             unsupportedReason: support.unsupportedReason,
             avplayAudioTrackIndex: normalizedTrackIndex,
             track: {
@@ -61,8 +70,11 @@ export function createPlayerScreenMethods60() {
               id: `audio-dash-${index}-${track?.id ?? ""}`,
               label: display.label,
               secondary: display.secondary,
+              languageText: display.languageText,
+              metadata: display.metadata,
               selected: index === selectedDashAudioTrack || (selectedDashAudioTrack < 0 && index === this.selectedAudioTrackIndex),
               supported: support.supported,
+              canTryAudioConversion: Boolean(support.canTryAudioConversion),
               unsupportedReason: support.unsupportedReason,
               dashAudioTrackIndex: index,
               track: {
@@ -84,8 +96,11 @@ export function createPlayerScreenMethods60() {
                 id: `audio-hls-${index}-${mergedTrack?.id ?? mergedTrack?.name ?? mergedTrack?.lang ?? ""}`,
                 label: display.label,
                 secondary: display.secondary,
+                languageText: display.languageText,
+                metadata: display.metadata,
                 selected: index === selectedHlsAudioTrack || (selectedHlsAudioTrack < 0 && index === this.selectedAudioTrackIndex),
                 supported: support.supported,
+                canTryAudioConversion: Boolean(support.canTryAudioConversion),
                 unsupportedReason: support.unsupportedReason,
                 hlsAudioTrackIndex: index,
                 track: {
@@ -95,9 +110,19 @@ export function createPlayerScreenMethods60() {
               };
             });
           } else {
-            const audioTracks = this.getAudioTracks();
+            const conversion = Environment.isWebOS() ? PlayerController.webOsDtsAudioState : null;
+            const projectedTracks = Boolean(conversion?.id && this.embeddedAudioTracks.length);
+            // LG may expose only the converted track. Its native index no longer
+            // represents the source list; retain all original language choices.
+            const audioTracks = projectedTracks ? [] : this.getAudioTracks();
             if (audioTracks.length || this.embeddedAudioTracks.length) {
               entries = this.getMergedAudioTrackEntries(audioTracks);
+              if (projectedTracks) {
+                const selectedIndex = conversion.sourceTrackIndex ?? conversion.targetIndex;
+                entries.forEach((entry) => {
+                  entry.selected = entry.embeddedAudioTrackIndex === selectedIndex;
+                });
+              }
             } else if (this.manifestAudioTracks.length) {
               entries = this.manifestAudioTracks.map((track, index) => {
                 const display = formatAudioTrackDisplay(track, index);
@@ -106,8 +131,11 @@ export function createPlayerScreenMethods60() {
                   id: `audio-manifest-${track.id}`,
                   label: display.label,
                   secondary: display.secondary,
+                  languageText: display.languageText,
+                  metadata: display.metadata,
                   selected: this.selectedManifestAudioTrackId === track.id,
                   supported: support.supported,
+                  canTryAudioConversion: Boolean(support.canTryAudioConversion),
                   unsupportedReason: support.unsupportedReason,
                   manifestAudioTrackId: track.id,
                   track: {
@@ -166,8 +194,11 @@ export function createPlayerScreenMethods60() {
         id: "audio-implicit-0",
         label: display.label,
         secondary: display.secondary,
+        languageText: display.languageText,
+        metadata: display.metadata,
         selected: true,
         supported: support.supported,
+        canTryAudioConversion: Boolean(support.canTryAudioConversion),
         unsupportedReason: support.unsupportedReason,
         implicitAudioTrack: true,
         audioTrackIndex: 0,
@@ -196,7 +227,9 @@ export function createPlayerScreenMethods60() {
         return false;
       }
       const selectedEntry = entries.find((entry) => entry?.selected);
-      const shouldFallback = selectedEntry ? selectedEntry.supported === false : entries[0]?.supported === false;
+      const shouldFallback = selectedEntry
+        ? selectedEntry.supported === false && !selectedEntry.canTryAudioConversion
+        : entries[0]?.supported === false && !entries[0]?.canTryAudioConversion;
       if (!shouldFallback) {
         return false;
       }

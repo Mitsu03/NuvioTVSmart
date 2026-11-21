@@ -2,8 +2,42 @@ import { createProfileScopedStore } from "./profileScopedStore.js";
 
 const KEY = "mdbListSettings";
 
+export const MDBLIST_RATING_ORDER = [
+  "imdb",
+  "trakt",
+  "tmdb",
+  "tomatoes",
+  "audience",
+  "letterboxd",
+  "metacritic",
+  "mal"
+];
+export const MDBLIST_PROVIDER_SETTINGS = {
+  imdb: "showImdb",
+  trakt: "showTrakt",
+  tmdb: "showTmdb",
+  tomatoes: "showTomatoes",
+  audience: "showAudience",
+  letterboxd: "showLetterboxd",
+  metacritic: "showMetacritic",
+  mal: "showMal"
+};
+export function normalizeMdbListRatingOrder(value) {
+  const input = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+  return [
+    ...new Set([
+      ...input
+        .map((item) => String(item).trim())
+        .filter((item) => MDBLIST_RATING_ORDER.includes(item)),
+      ...MDBLIST_RATING_ORDER
+    ])
+  ];
+}
+
 const DEFAULTS = {
   enabled: false,
+  showOnHero: false,
+  ratingOrder: MDBLIST_RATING_ORDER,
   apiKey: "",
   showTrakt: true,
   showImdb: true,
@@ -20,6 +54,8 @@ function normalizeMdbListSettings(value = {}) {
     ...DEFAULTS,
     ...(value || {}),
     enabled: Boolean(value?.enabled),
+    showOnHero: Boolean(value?.showOnHero),
+    ratingOrder: normalizeMdbListRatingOrder(value?.ratingOrder),
     apiKey: String(value?.apiKey || "").trim(),
     showTrakt: value?.showTrakt !== false,
     showImdb: value?.showImdb !== false,

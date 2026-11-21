@@ -52,16 +52,51 @@
   font-size: var(--tv-body-text);
   line-height: 1.5;
   color: var(--detail-text-primary);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
-  overflow: hidden;
-  text-overflow: ellipsis;
   overflow-wrap: anywhere;
   transition:
     opacity 400ms ease,
     transform 400ms ease;
+}
+
+.detail-synopsis-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  line-clamp: 8;
+  overflow: hidden;
+}
+
+.detail-synopsis-more {
+  font-size: 24px;
+  color: var(--text-secondary);
+}
+
+.series-detail-description.focused {
+  background: rgba(var(--focus-color-rgb-legacy), 0.1);
+  border-radius: 16px;
+  outline: 0;
+}
+
+.nuvio-dialog-panel.detail-synopsis-dialog {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  padding: 48px 96px;
+  background: rgba(0, 0, 0, 0.96);
+}
+
+.detail-synopsis-full-text {
+  width: 78%;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 32px;
+  line-height: 48px;
+  outline: 0;
 }
 
 .detail-meta-stack {
@@ -85,7 +120,8 @@
 
 .detail-meta-row .detail-meta-genres {
   min-width: 0;
-  flex: 1 1 auto;
+  /* Android weight(1f, fill = false): only its own width, so the year follows it. */
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -317,6 +353,11 @@
   background: rgba(0, 0, 0, 0.42);
   font-size: clamp(11px, 0.75vw, 14px);
   line-height: 1.35;
+  max-width: calc(100% - 2 * var(--episode-unavailable-inset));
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   letter-spacing: 0.09em;
   font-weight: 600;
   text-transform: uppercase;
@@ -406,7 +447,9 @@
 .series-episode-status {
   position: absolute;
   top: 24px;
-  left: 24px;
+  --episode-status-inset: 24px;
+  right: var(--episode-status-inset);
+  left: auto;
   width: 40px;
   height: 40px;
   border-radius: 999px;
@@ -435,17 +478,42 @@
 .series-episode-unavailable {
   position: absolute;
   top: 24px;
-  right: 24px;
+  --episode-unavailable-inset: 24px;
+  --episode-status-size: 40px;
+  right: var(--episode-unavailable-inset);
   padding: 5px 10px;
   border-radius: 9px;
   background: rgba(93, 64, 55, 0.8);
   color: rgba(255, 255, 255, 0.9);
   font-size: clamp(11px, 0.75vw, 14px);
   line-height: 1.35;
+  max-width: calc(100% - 2 * var(--episode-unavailable-inset));
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   letter-spacing: 0.09em;
   font-weight: 600;
 }
 
 .series-insight-section {
   margin-top: 0;
+}
+
+.series-episode-card.watched .series-episode-unavailable {
+  left: var(--episode-unavailable-inset);
+  right: auto;
+  max-width: calc(100% - 2 * var(--episode-unavailable-inset) - var(--episode-status-size) - 12px);
+}
+html[dir="rtl"] .series-episode-status {
+  left: var(--episode-status-inset);
+  right: auto;
+}
+html[dir="rtl"] .series-episode-unavailable {
+  left: var(--episode-unavailable-inset);
+  right: auto;
+}
+html[dir="rtl"] .series-episode-card.watched .series-episode-unavailable {
+  right: var(--episode-unavailable-inset);
+  left: auto;
 }

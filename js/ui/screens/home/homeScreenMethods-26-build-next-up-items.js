@@ -1,4 +1,11 @@
+import { watchedItemsShareIdentity } from "../../../data/repository/watchedIdentity.js";
+import { EpisodeShuffleStore } from "../../../data/local/episodeShuffleStore.js";
+import { selectShuffleEpisode } from "../../../core/player/episodeShuffleSelection.js";
+import { episodeKey } from "../../../core/player/episodeShuffle.js";
+import { ProfileManager } from "../../../core/profile/profileManager.js";
+import { resolveContinueWatchingEpisodeRating } from "./continueWatchingEpisodeRating.js";
 import * as internals from "./homeScreenContext.js";
+import { NoNextUpSeedStore, earliestUpcomingReleaseMs, isNoNextUpStillConfirmed, noNextUpRecheckAt } from "./continueWatchingStability.js";
 
 export function createHomeScreenMethods26() {
   const {
@@ -30,6 +37,8 @@ export function createHomeScreenMethods26() {
 
   return {
     async buildNextUpItems({ allProgress = [], inProgressItems = [], nextUpProgressCandidates = [], watchedItems = [] } = {}) {
+      const shuffleProfileId = ProfileManager.getActiveProfileId();
+      const shuffleVisit = this.shuffleVisit;
       const resolvedCandidates =
         Array.isArray(nextUpProgressCandidates) && nextUpProgressCandidates.length
           ? nextUpProgressCandidates
@@ -45,13 +54,21 @@ export function createHomeScreenMethods26() {
       const dismissedNextUpKeys = new Set(ContinueWatchingPreferences.getDismissedNextUpKeys());
       const activeCandidates = resolvedCandidates.filter((entry) => {
         const contentId = String(entry?.contentId || "").trim();
-        return contentId && !dismissedNextUpKeys.has(contentId);
+        return contentId && !dismissedNextUpKeys.has(contentId) && !watchProgressRepository.isHiddenForContinueWatching?.(contentId);
       });
       if (!activeCandidates.length) {
         return [];
       }
 
       const watchedEpisodeIndex = this.buildWatchedEpisodeIndex(watchedItems);
+      // Android: a series an earlier launch found without an episode after its seed is
+      // not looked up again until its next release, at the latest after a day. The key
+      // holds the seed, so watching on is never skipped.
+      const noNextUpBefore = NoNextUpSeedStore.all();
+      const noNextUpSeeds = { ...noNextUpBefore };
+      const showUnairedKey = this.layoutPrefs?.showUnairedNextUp !== false ? "1" : "0";
+      const noNextUpSeedKey = (entry) =>
+        `${String(entry?.contentId || "").trim()}:${entry?.season ?? ""}:${entry?.episode ?? ""}:${showUnairedKey}`;
 
       const nextUpItems = await resolveNextUpCandidates(
         activeCandidates,
@@ -59,6 +76,11 @@ export function createHomeScreenMethods26() {
           const contentType = String(progressEntry?.contentType || "series").toLowerCase();
           const contentId = String(progressEntry?.contentId || "").trim();
           if (!contentId || !isSeriesTypeForContinueWatching(contentType)) {
+            return null;
+          }
+
+          const seedKey = noNextUpSeedKey(progressEntry);
+          if (isNoNextUpStillConfirmed(Number(noNextUpBefore[seedKey]), Date.now())) {
             return null;
           }
 
@@ -73,10 +95,38 @@ export function createHomeScreenMethods26() {
             return null;
           }
           const watchedEpisodeKeys = watchedEpisodeIndex.get(contentId) || new Set();
-          const resolvedNextEpisode = this.resolveNextUpEpisode(meta, progressEntry, allProgress, watchedEpisodeKeys, {
-            showUnairedNextUp: this.layoutPrefs?.showUnairedNextUp
-          });
+          if (ProfileManager.getActiveProfileId() !== shuffleProfileId || this.shuffleVisit !== shuffleVisit) return null;
+          const shuffleSettings = EpisodeShuffleStore.get(contentId, contentType, shuffleProfileId);
+          const resolvedNextEpisode = shuffleSettings.enabled
+            ? selectShuffleEpisode({
+                contentId,
+                contentType,
+                videos: meta.videos || [],
+                surface: "home",
+                watched: new Set(
+                  watchedItems
+                    .filter((p) => p.season != null && p.episode != null && watchedItemsShareIdentity(p, { ...meta, contentId }))
+                    .map(episodeKey)
+                ),
+                progress: new Map(
+                  allProgress.filter((p) => watchedItemsShareIdentity(p, { ...meta, contentId })).map((p) => [episodeKey(p), p])
+                ),
+                useLocalState: false,
+                visit: shuffleVisit || 0,
+                reference: meta,
+                profileId: shuffleProfileId
+              })
+            : this.resolveNextUpEpisode(meta, progressEntry, allProgress, watchedEpisodeKeys, {
+                showUnairedNextUp: this.layoutPrefs?.showUnairedNextUp
+              });
           if (!resolvedNextEpisode) {
+            if (!shuffleSettings.enabled) {
+              noNextUpSeeds[seedKey] = noNextUpRecheckAt(earliestUpcomingReleaseMs(meta.videos), Date.now());
+            }
+            return null;
+          }
+          delete noNextUpSeeds[seedKey];
+          if (watchProgressRepository.isHiddenForContinueWatching?.(contentId, resolvedNextEpisode.season)) {
             return null;
           }
 
@@ -95,6 +145,7 @@ export function createHomeScreenMethods26() {
             return null;
           }
           if (
+            !shuffleSettings.enabled &&
             !watchProgressRepository.isTrackedAsWatching(contentId) &&
             !shouldSurfaceNextUpForUntrackedSeries({
               seedUpdatedAt: progressEntry?.updatedAt,
@@ -125,6 +176,7 @@ export function createHomeScreenMethods26() {
             seedUpdatedAt: Number(progressEntry?.updatedAt || 0) || 0,
             seedSeason: Number(progressEntry?.season || 0) || null,
             isNextUp: true,
+            shufflePlayback: shuffleSettings.enabled,
             ...releaseState,
             title: meta.name || prettyId(contentId),
             landscapePoster: firstNonEmpty(
@@ -145,6 +197,10 @@ export function createHomeScreenMethods26() {
             released: firstNonEmpty(nextEpisode.released),
             releaseInfo: firstNonEmpty(nextEpisode.released, meta.releaseInfo),
             imdbRating: resolveImdbRating(meta),
+            episodeImdbRating: await resolveContinueWatchingEpisodeRating(
+              { ...progressEntry, contentId, season: nextEpisode.season, episode: nextEpisode.episode },
+              nextEpisode.imdbRating
+            ),
             genres: Array.isArray(meta.genres) ? meta.genres : [],
             runtimeMinutes: Number(meta.runtimeMinutes ?? meta.runtime ?? 0) || 0,
             ageRating: firstNonEmpty(meta.ageRating, meta.age_rating),
@@ -158,6 +214,11 @@ export function createHomeScreenMethods26() {
           concurrency: CW_MAX_NEXT_UP_CONCURRENCY
         }
       );
+
+      if (JSON.stringify(noNextUpSeeds) !== JSON.stringify(noNextUpBefore) && ProfileManager.getActiveProfileId() === shuffleProfileId) {
+        NoNextUpSeedStore.save(noNextUpSeeds);
+      }
+      this.continueWatchingNoNextUpRecheckTimes = Object.values(noNextUpSeeds).map(Number);
 
       // The episode search already applied this setting to the addon release
       // date. Check it again here because TMDB release dates are merged in after
@@ -259,13 +320,13 @@ export function createHomeScreenMethods26() {
           thumbnail: settings.useArtwork ? showEnrichment.poster || meta.thumbnail : meta.thumbnail,
           logo: settings.useArtwork ? showEnrichment.logo || meta.logo : meta.logo,
           genres: settings.useBasicInfo && showEnrichment.genres?.length ? showEnrichment.genres : meta.genres,
-          releaseInfo: settings.useReleaseDates ? showEnrichment.releaseInfo || meta.releaseInfo : meta.releaseInfo,
-          released: settings.useReleaseDates ? showEnrichment.released || meta.released : meta.released,
           runtime: settings.useDetails ? showEnrichment.runtime || meta.runtime : meta.runtime,
           country: settings.useDetails ? showEnrichment.country || meta.country : meta.country,
           language: settings.useDetails ? showEnrichment.language || meta.language : meta.language,
           ageRating: settings.useDetails ? showEnrichment.ageRating || meta.ageRating : meta.ageRating,
           status: settings.useDetails ? showEnrichment.status || meta.status : meta.status,
+          releaseInfo: settings.useReleaseDates ? showEnrichment.releaseInfo || meta.releaseInfo : meta.releaseInfo,
+          released: settings.useReleaseDates ? showEnrichment.released || meta.released : meta.released,
           tmdbRating:
             settings.useBasicInfo && typeof showEnrichment.rating === "number" ? Number(showEnrichment.rating.toFixed(1)) : meta.tmdbRating,
           episodeThumbnail: settings.useArtwork ? currentEpisode?.thumbnail || meta.episodeThumbnail : meta.episodeThumbnail,

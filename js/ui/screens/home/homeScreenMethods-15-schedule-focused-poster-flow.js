@@ -8,7 +8,6 @@ export function createHomeScreenMethods15() {
     getModernSidebarSelectedNode,
     setModernSidebarExpanded,
     setModernSidebarPillIconOnly,
-    parseCssPx,
     MODERN_SIDEBAR_PILL_AUTO_COLLAPSE_MS
   } = internals;
 
@@ -63,6 +62,10 @@ export function createHomeScreenMethods15() {
         token: flowToken
       };
       if (shouldPreviewTrailer) {
+        // The lookup (TMDB id, trailer list, addon metadata) only has to be
+        // ready when the preview is due. Starting it 150 ms after every focus
+        // made each card the user merely passed pay for it.
+        const prefetchDelayMs = Math.max(150, delayMs - 2000);
         const prefetchTrailer = () => {
           this.focusedPosterTrailerPrefetchTimer = null;
           if (
@@ -84,11 +87,11 @@ export function createHomeScreenMethods15() {
             );
             return;
           }
-          this.focusedPosterTrailerPrefetchTimer = setTimeout(prefetchTrailer, 150);
+          this.focusedPosterTrailerPrefetchTimer = setTimeout(prefetchTrailer, prefetchDelayMs);
         };
         this.focusedPosterTrailerPrefetchTimer = setTimeout(
           deferUntilVerticalSettle ? waitForVerticalSettleThenPrefetch : prefetchTrailer,
-          deferUntilVerticalSettle ? MODERN_HOME_CONSTANTS.verticalScrollSettlePollMs : 150
+          deferUntilVerticalSettle ? MODERN_HOME_CONSTANTS.verticalScrollSettlePollMs : prefetchDelayMs
         );
       }
       if (
@@ -271,12 +274,13 @@ export function createHomeScreenMethods15() {
       if (!(targetShell instanceof HTMLElement)) {
         return { horizontal: 0, vertical: 0 };
       }
-      const shellStyles = getComputedStyle(targetShell);
       const expandedFrame = expanded.querySelector(".home-poster-frame");
       const isLandscape = expanded.classList.contains("is-landscape");
-      const collapsedHeight = isLandscape
-        ? parseCssPx(shellStyles.getPropertyValue("--home-landscape-poster-height"), expandedFrame?.offsetHeight || 0)
-        : parseCssPx(shellStyles.getPropertyValue("--home-modern-portrait-poster-height"), expandedFrame?.offsetHeight || 0);
+      // render() pins these metrics as inline shell variables, so the cache matches computed style.
+      const metrics = isLandscape
+        ? this.getCachedModernLandscapePosterMetrics(targetShell)
+        : this.getCachedModernPortraitPosterMetrics(targetShell);
+      const collapsedHeight = Number.isFinite(metrics?.height) ? metrics.height : Number(expandedFrame?.offsetHeight || 0);
 
       const vertical = direction === "down" && isLandscape ? Math.max(0, Number(expandedFrame?.offsetHeight || 0) - collapsedHeight) : 0;
 
@@ -300,13 +304,20 @@ export function createHomeScreenMethods15() {
         leftPad = Math.max(0, Number.parseFloat(styles?.paddingLeft || "0") || 0);
         track.dataset.trackPadAlignLeft = String(leftPad);
       }
-      const trackRect = track.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const targetLeft = targetRect.left - trackRect.left + Number(track.scrollLeft || 0) - Number(layoutAdjustment || 0);
+      let targetLeft = 0;
+      if (target.offsetParent === track) {
+        // Cards are direct track children in the common layout; their
+        // offsetLeft is already the content coordinate, so no rect reads are
+        // needed on the D-pad hot path.
+        targetLeft = Number(target.offsetLeft || 0);
+      } else {
+        const trackRect = track.getBoundingClientRect();
+        targetLeft = target.getBoundingClientRect().left - trackRect.left + Number(track.scrollLeft || 0);
+      }
       const maxScrollLeft = Math.max(0, Number(track.scrollWidth || 0) - Number(track.clientWidth || 0));
       return {
         container: track,
-        value: Math.max(0, Math.min(maxScrollLeft, targetLeft - leftPad))
+        value: Math.max(0, Math.min(maxScrollLeft, targetLeft - leftPad - Number(layoutAdjustment || 0)))
       };
     }
   };

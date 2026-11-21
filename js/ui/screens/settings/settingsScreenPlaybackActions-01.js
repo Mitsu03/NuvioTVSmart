@@ -1,3 +1,10 @@
+import {
+  SOURCE_FALLBACK_MAX_SOURCES_MAX,
+  SOURCE_FALLBACK_MAX_SOURCES_MIN,
+  SOURCE_STARTUP_TIMEOUT_SECONDS_MAX,
+  SOURCE_STARTUP_TIMEOUT_SECONDS_MIN,
+  SOURCE_STARTUP_TIMEOUT_SECONDS_STEP
+} from "../../../core/player/sourceFallback.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./settingsScreenContext.js";
 
@@ -5,7 +12,6 @@ export function registerPlaybackActionsPart01(model) {
   const {
     addonRepository,
     PlayerSettingsStore,
-    WebOsAudioCompatibilityStore,
     PluginManager,
     NEXT_EPISODE_THRESHOLD_MODE_OPTIONS,
     NEXT_EPISODE_THRESHOLD_PERCENT_OPTIONS,
@@ -25,9 +31,6 @@ export function registerPlaybackActionsPart01(model) {
   this.actionMap.set("playback:toggle:audio", () => {
     this.toggleExpandedSection("playback", "audio");
   });
-  this.actionMap.set("playback:toggle:audioCompatibility", () => {
-    this.toggleExpandedSection("playback", "audioCompatibility");
-  });
   this.actionMap.set("playback:toggle:subtitles", () => {
     this.toggleExpandedSection("playback", "subtitles");
   });
@@ -38,11 +41,6 @@ export function registerPlaybackActionsPart01(model) {
   this.actionMap.set("playback:autoplay", () => {
     PlayerSettingsStore.set({
       autoplayNextEpisode: !PlayerSettingsStore.get().autoplayNextEpisode
-    });
-  });
-  this.actionMap.set("playback:nextEpisodeCountdown", () => {
-    PlayerSettingsStore.set({
-      nextEpisodeCountdownEnabled: !PlayerSettingsStore.get().nextEpisodeCountdownEnabled
     });
   });
   this.actionMap.set("playback:postPlayRecommendations", () => {
@@ -116,9 +114,10 @@ export function registerPlaybackActionsPart01(model) {
     this.actionMap.set(focusKey, () => PlayerSettingsStore.set({ [field]: !PlayerSettingsStore.get()[field] }));
   togglePlayerSetting("playback:loadingOverlay", "loadingOverlayEnabled");
   togglePlayerSetting("playback:loadingStatus", "showPlayerLoadingStatus");
-  togglePlayerSetting("playback:minimalBufferingUi", "minimalBufferingUiEnabled");
   togglePlayerSetting("playback:pauseOverlay", "pauseOverlayEnabled");
   togglePlayerSetting("playback:parentalGuide", "parentalGuideEnabled");
+  togglePlayerSetting("playback:chapters", "chaptersEnabled");
+  togglePlayerSetting("playback:chapterTitle", "chapterTitleEnabled");
   ["intro", "recap", "outro", "movie-credits"].forEach((type) =>
     this.actionMap.set(`playback:autoSkip:${type}`, () => {
       const current = PlayerSettingsStore.get().autoSkipSegmentTypes || [];
@@ -130,18 +129,6 @@ export function registerPlaybackActionsPart01(model) {
   this.actionMap.set("playback:osdClock", () => {
     PlayerSettingsStore.set({
       osdClockEnabled: !PlayerSettingsStore.get().osdClockEnabled
-    });
-  });
-  this.actionMap.set("playback:forceDts", () => {
-    const current = WebOsAudioCompatibilityStore.get();
-    WebOsAudioCompatibilityStore.set({
-      forceDtsAudio: !current.forceDtsAudio
-    });
-  });
-  this.actionMap.set("playback:forceTrueHd", () => {
-    const current = WebOsAudioCompatibilityStore.get();
-    WebOsAudioCompatibilityStore.set({
-      forceTrueHdAudio: !current.forceTrueHdAudio
     });
   });
   this.actionMap.set("playback:nextEpisodeThresholdMode", () => {
@@ -215,6 +202,45 @@ export function registerPlaybackActionsPart01(model) {
       returnFocusKey: "playback:autoStreamTimeout",
       onSelect: (option) => {
         PlayerSettingsStore.set({ streamAutoPlayTimeoutSeconds: Number(option.id) });
+      }
+    });
+  });
+  this.actionMap.set("playback:autoStreamFallback", () => {
+    PlayerSettingsStore.set({
+      streamAutoPlayFallbackOnFailure: !PlayerSettingsStore.get().streamAutoPlayFallbackOnFailure
+    });
+  });
+  this.actionMap.set("playback:autoStreamFallbackMaxSources", () => {
+    const options = [];
+    for (let count = SOURCE_FALLBACK_MAX_SOURCES_MIN; count <= SOURCE_FALLBACK_MAX_SOURCES_MAX; count += 1) {
+      options.push({ id: count, label: String(count) });
+    }
+    this.openOptionDialog({
+      title: t("autoplay_fallback_max_sources", {}, "Sources to try on failure"),
+      options,
+      selectedId: PlayerSettingsStore.get().streamAutoPlayFallbackMaxSources,
+      returnFocusKey: "playback:autoStreamFallbackMaxSources",
+      onSelect: (option) => {
+        PlayerSettingsStore.set({ streamAutoPlayFallbackMaxSources: Number(option.id) });
+      }
+    });
+  });
+  this.actionMap.set("playback:autoStreamFallbackTimeout", () => {
+    const options = [];
+    for (
+      let seconds = SOURCE_STARTUP_TIMEOUT_SECONDS_MIN;
+      seconds <= SOURCE_STARTUP_TIMEOUT_SECONDS_MAX;
+      seconds += SOURCE_STARTUP_TIMEOUT_SECONDS_STEP
+    ) {
+      options.push({ id: seconds, label: t("autoplay_fallback_startup_timeout_value", [seconds], `${seconds}s`) });
+    }
+    this.openOptionDialog({
+      title: t("autoplay_fallback_startup_timeout", {}, "Time for a source to start"),
+      options,
+      selectedId: PlayerSettingsStore.get().streamAutoPlayFallbackStartupTimeoutSeconds,
+      returnFocusKey: "playback:autoStreamFallbackTimeout",
+      onSelect: (option) => {
+        PlayerSettingsStore.set({ streamAutoPlayFallbackStartupTimeoutSeconds: Number(option.id) });
       }
     });
   });

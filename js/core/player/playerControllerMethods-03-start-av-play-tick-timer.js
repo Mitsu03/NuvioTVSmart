@@ -1,12 +1,35 @@
+import * as internals from "./playerController.js";
+
+// getCurrentTime()/getDuration() are synchronous bridge calls; one UI tick reads
+// the position many times. Reuse a poll that is younger than this.
+const AVPLAY_TIMELINE_POLL_REUSE_MS = 40;
+
 export function createPlayerControllerMethods03() {
+  const { logTizenAvPlayDebug } = internals;
   return {
     startAvPlayTickTimer() {
       this.stopAvPlayTickTimer();
+      let trackPollTicks = 0;
       this.avplayTickTimer = setInterval(() => {
         if (!this.isUsingAvPlay()) {
           return;
         }
         this.refreshAvPlayTimeline();
+        trackPollTicks += 1;
+        if ((trackPollTicks <= 15 || trackPollTicks % 5 === 0) && ["PLAYING", "PAUSED"].includes(this.getAvPlayState())) {
+          const fingerprint = () =>
+            JSON.stringify([
+              this.avplayAudioTracks,
+              this.avplaySubtitleTracks,
+              this.selectedAvPlayAudioTrackIndex,
+              this.selectedAvPlaySubtitleTrackIndex
+            ]);
+          const previous = fingerprint();
+          this.syncAvPlayTrackInfo({ force: true });
+          if (previous !== fingerprint()) {
+            this.emitVideoEvent("avplaytrackschanged", { playbackEngine: this.playbackEngine });
+          }
+        }
         this.emitVideoEvent("timeupdate", { playbackEngine: this.playbackEngine });
       }, 1000);
     },
@@ -16,6 +39,8 @@ export function createPlayerControllerMethods03() {
       }
       try {
         const gated = Boolean(this.startupAudioGateActive || this.startupPresentationAudioMuted);
+        // A pending conversion reload must restore the latest startup mute state.
+        if (this.webOsDtsAudioState) this.webOsDtsAudioState.originalMuted = gated;
         this.video.muted = gated;
         this.video.defaultMuted = gated;
         if (!gated && (!Number.isFinite(Number(this.video.volume)) || Number(this.video.volume) <= 0)) {
@@ -107,7 +132,9 @@ export function createPlayerControllerMethods03() {
         return;
       }
       if (this.isUsingAvPlay()) {
-        if (this.avplayReady) {
+        // A startup resume seek clears avplayReady while it is in flight;
+        // startPreparedAvPlayPlayback() queues the start until it settles.
+        if (this.avplayReady || this.avplaySeekInFlight) {
           this.startPreparedAvPlayPlayback();
         }
         return;
@@ -116,11 +143,76 @@ export function createPlayerControllerMethods03() {
         this.resumeNativePlaybackAfterStartupGate();
       }
     },
+    // Samsung allows setSelectTrack(AUDIO) in PLAYING only, so a startup
+    // language chosen behind the loading logo needs playback to begin first.
+    // Tizen 6.5+ documents disableAudioStream(): play silently, switch in
+    // PLAYING as the API requires, then pause and restore audio, so the first
+    // audible frame is already the chosen track. Older TVs have no silent
+    // start; a play/pause hop reaches PAUSED, where tested firmware (Tizen 5.0)
+    // accepts the switch. If either path fails, the pending index stays for
+    // the PLAYING retries.
+    selectPendingAvPlayAudioTrackBeforeStart(avplay) {
+      const targetIndex = this.resolveAvPlayAudioTrackIndex(this.pendingAvPlayAudioTrackIndex);
+      const selectionIndex = this.getAvPlayAudioTrackSelectionIndex(targetIndex);
+      if (selectionIndex < 0 || this.getAvPlayState() !== "READY" || this.getCurrentAvPlayAudioTrackIndex() === targetIndex) {
+        return false;
+      }
+      const silentStart = typeof avplay.disableAudioStream === "function" && typeof avplay.enableAudioStream === "function";
+      let audioDisabled = false;
+      try {
+        if (silentStart) {
+          avplay.disableAudioStream();
+          audioDisabled = true;
+          avplay.play();
+          avplay.setSelectTrack("AUDIO", selectionIndex);
+          avplay.pause();
+        } else {
+          avplay.play();
+          avplay.pause();
+          avplay.setSelectTrack("AUDIO", selectionIndex);
+        }
+      } catch (error) {
+        logTizenAvPlayDebug("Tizen AVPlay pre-start audio selection failed", {
+          targetIndex,
+          silentStart,
+          error: error?.message || String(error || "")
+        });
+        try {
+          // The normal start below calls play(), which PLAYING would reject.
+          if (this.getAvPlayState() === "PLAYING") avplay.pause();
+        } catch (_) {
+          // Playback start reports any remaining state problem.
+        }
+        return false;
+      } finally {
+        if (audioDisabled) {
+          try {
+            avplay.enableAudioStream();
+          } catch (_) {
+            // Nothing else can restore it; the PLAYING retries keep the selection.
+          }
+        }
+      }
+      this.selectedAvPlayAudioTrackIndex = targetIndex;
+      this.pendingAvPlayAudioTrackIndex = -1;
+      this.desiredAvPlayAudioTrackIndex = targetIndex;
+      this.desiredAvPlayAudioTrackUntil = Date.now() + 5000;
+      return true;
+    },
     startPreparedAvPlayPlayback({ syncTracks = true } = {}) {
       const avplay = this.getAvPlay();
       if (!avplay || !this.isUsingAvPlay()) {
         return false;
       }
+      if (this.avplaySeekInFlight) {
+        // Samsung forbids other AVPlay calls until seekTo() reports back.
+        // Calling play() here (resume seek issued from the prepared events)
+        // left the native player rejecting later seeks with INVALID_STATE.
+        this.avplayStartAfterSeek = { syncTracks };
+        logTizenAvPlayDebug("Tizen AVPlay seek in flight; delaying playback start until it settles");
+        return true;
+      }
+      this.selectPendingAvPlayAudioTrackBeforeStart(avplay);
       try {
         avplay.play?.();
         // AVPlay can report a startup error and still complete preparation. A
@@ -178,6 +270,11 @@ export function createPlayerControllerMethods03() {
       if (!avplay) {
         return;
       }
+      const now = Date.now();
+      if (now - Number(this.avplayTimelinePolledAt || 0) < AVPLAY_TIMELINE_POLL_REUSE_MS) {
+        return;
+      }
+      this.avplayTimelinePolledAt = now;
       try {
         const currentMs = Number(avplay.getCurrentTime?.() || 0);
         if (Number.isFinite(currentMs) && currentMs >= 0) {

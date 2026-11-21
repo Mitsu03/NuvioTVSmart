@@ -1,3 +1,6 @@
+import { filenameMatches } from "./filenameEpisodeMatcher.js";
+import { indexOfPluginBingeMatch } from "./pluginBingeGroup.js";
+import { canResolveMediaServerStream } from "../../data/mediaserver/mediaServerRepository.js";
 // Auto stream selection, ported from the Android TV app's StreamAutoPlaySelector
 // and StreamAutoPlayPolicy so the two clients behave the same. Given the list of
 // streams shown in the picker and the user's auto-play settings, it returns the
@@ -80,7 +83,8 @@ function isPlayableStream(stream = {}) {
   }
   return Boolean(
     stream &&
-    (stream.url ||
+    (canResolveMediaServerStream(stream) ||
+      stream.url ||
       stream.ytId ||
       stream.infoHash ||
       resolve.infoHash ||
@@ -95,6 +99,19 @@ function streamBingeGroup(stream = {}) {
   return String(
     stream?.behaviorHints?.bingeGroup || stream?.raw?.behaviorHints?.bingeGroup || ""
   ).trim();
+}
+
+/** The stream whose plugin variant continues the saved group when the strings are not equal. */
+function findPluginBingeGroupMatchStream(streams = [], targetGroup = "") {
+  const group = String(targetGroup || "").trim();
+  if (!group) {
+    return null;
+  }
+  const index = indexOfPluginBingeMatch(
+    group,
+    (Array.isArray(streams) ? streams : []).map((stream) => streamBingeGroup(stream))
+  );
+  return index == null ? null : streams[index] || null;
 }
 
 function streamSearchableText(stream = {}) {
@@ -147,6 +164,36 @@ export function selectAutoPlayStream(streams, options = {}) {
   if (!list.length) {
     return null;
   }
+  const filename = (stream) =>
+    stream?.behaviorHints?.filename || stream?.raw?.behaviorHints?.filename;
+  const preciseCandidates = list.filter(
+    (stream) => !stream.externalUrl && !stream.raw?.externalUrl && isPlayableStream(stream)
+  );
+  const group = String(options.preferredBingeGroup || "").trim();
+  if (options.filenameOnlyFallback && options.preferredFilename) {
+    const match = preciseCandidates.find((stream) =>
+      filenameMatches(filename(stream), options.preferredFilename)
+    );
+    if (match) return match;
+  }
+  if (options.preferBingeGroupInSelection && group) {
+    const sameGroup = preciseCandidates.filter((stream) => streamBingeGroup(stream) === group);
+    const match =
+      sameGroup.find((stream) => filenameMatches(filename(stream), options.preferredFilename)) ||
+      (options.preferredInfoHash &&
+        sameGroup.find(
+          (stream) =>
+            String(stream.infoHash || stream.raw?.infoHash || "").toLowerCase() ===
+            String(options.preferredInfoHash).toLowerCase()
+        ));
+    if (match) return match;
+    // A plugin keeps its provider/variant when the episode title changes: match the
+    // saved token group, not only the exact string.
+    if (!sameGroup.length) {
+      const pluginMatch = findPluginBingeGroupMatchStream(preciseCandidates, group);
+      if (pluginMatch) return pluginMatch;
+    }
+  }
   const mode = normalizeMode(options.mode);
   const source = normalizeSource(options.source);
   const installedAddonNames =
@@ -172,13 +219,14 @@ export function selectAutoPlayStream(streams, options = {}) {
     return null;
   }
 
-  // Android gives an exact binge-group match priority over the normal mode,
-  // including MANUAL. In bingeGroupOnly mode, a miss must open the picker.
+  // Android gives a binge-group match priority over the normal mode, including MANUAL,
+  // and searches every stream, not just the source-filtered candidates. In bingeGroupOnly
+  // mode, a miss must open the picker.
   const preferredBingeGroup = String(options.preferredBingeGroup || "").trim();
   if (options.preferBingeGroupInSelection && preferredBingeGroup) {
-    const bingeGroupMatch = candidates.find(
-      (stream) => streamBingeGroup(stream) === preferredBingeGroup && isPlayableStream(stream)
-    );
+    const bingeGroupMatch =
+      preciseCandidates.find((stream) => streamBingeGroup(stream) === preferredBingeGroup) ||
+      findPluginBingeGroupMatchStream(preciseCandidates, preferredBingeGroup);
     if (bingeGroupMatch) {
       return bingeGroupMatch;
     }

@@ -147,6 +147,7 @@ export function createPlayerControllerMethods02() {
       });
     },
     resetNativeMediaState() {
+      this.cancelWebOsExactSeek({ pause: true });
       this.nativeMediaId = "";
       this.nativeMediaIdLookupToken = Number(this.nativeMediaIdLookupToken || 0) + 1;
       this.webOsPlaybackRateRequestToken = Number(this.webOsPlaybackRateRequestToken || 0) + 1;

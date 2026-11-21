@@ -1,4 +1,5 @@
 import { Router } from "../../navigation/routerState.js";
+import { isWatchPartySectionVisible } from "./settingsWatchPartySection.js";
 
 import { ScreenUtils } from "../../navigation/screen.js";
 
@@ -41,8 +42,6 @@ import {
 } from "../../../core/player/subtitleTextOpacity.js";
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
-
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
 
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 
@@ -143,13 +142,8 @@ export function updateSettingsScrollIndicators(container) {
     return;
   }
 
-  const verticalFrame = container.closest?.(".settings-content-frame, .settings-sidebar-frame, .settings-trakt-scroll-frame");
-  if (
-    verticalFrame &&
-    (container.classList?.contains("settings-content") ||
-      container.classList?.contains("settings-sidebar") ||
-      container.classList?.contains("settings-trakt-scroll-area"))
-  ) {
+  const verticalFrame = container.closest?.(".settings-content-frame, .settings-trakt-scroll-frame");
+  if (verticalFrame && (container.classList?.contains("settings-content") || container.classList?.contains("settings-trakt-scroll-area"))) {
     const maxScroll = getScrollMax(container, "y");
     const scrollTop = getScrollPosition(container, "y");
     verticalFrame.classList.toggle("can-scroll-backward", scrollTop > 1);
@@ -177,7 +171,7 @@ export function bindSettingsScrollIndicators(root) {
     return;
   }
 
-  root.querySelectorAll?.(".settings-sidebar, .settings-content, .settings-theme-row, .settings-trakt-scroll-area").forEach((container) => {
+  root.querySelectorAll?.(".settings-content, .settings-theme-row, .settings-trakt-scroll-area").forEach((container) => {
     if (!container.settingsScrollIndicatorBound) {
       container.settingsScrollIndicatorBound = true;
       container.addEventListener("scroll", () => updateSettingsScrollIndicators(container), {
@@ -306,6 +300,9 @@ export function getVisibleSections(model) {
     }
     if (section.id === "account" || section.id === "profiles") {
       return isPrimaryProfileActive;
+    }
+    if (section.id === "watchParty") {
+      return isWatchPartySectionVisible();
     }
     return true;
   });

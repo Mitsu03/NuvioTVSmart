@@ -347,13 +347,6 @@
   color: rgba(255, 255, 255, 0.68);
 }
 
-.player-stream-source {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
 .player-title,
 .player-dialog-title,
 .player-sources-title,
@@ -414,6 +407,11 @@
   margin-top: min(1.25vw, 24px); /* ATV metadata spacer 12dp -> 24px */
 }
 
+/* ATV PlayerScreen: live playback has no progress bar. */
+.player-progress-shell.hidden {
+  display: none;
+}
+
 .player-progress-shell.focused .player-progress-track {
   height: min(1.04vw, 20px); /* ATV focused 10dp -> 20px */
 }
@@ -459,4 +457,146 @@
 
 .player-modal-backdrop.hidden {
   transition-duration: 200ms;
+}
+
+.player-chapters-list {
+  margin-top: 32px; /* ATV 16dp -> 32px */
+  padding: 8px 0; /* ATV 4dp -> 8px */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.player-chapters-list::-webkit-scrollbar {
+  display: none;
+}
+
+.player-chapter-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 24px; /* ATV 12dp -> 24px */
+  padding: 24px 28px; /* ATV 12/14dp -> 24/28px */
+  margin-bottom: 16px; /* ATV 8dp -> 16px */
+  border: 1px solid transparent;
+  border-radius: 32px; /* ATV radius.xl 16dp -> 32px */
+  background: var(--player-background-card);
+  color: var(--player-text-primary);
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.player-chapter-item.focused {
+  border-color: var(--player-focus-ring);
+  background: var(--player-focus-background);
+}
+
+.player-chapter-item.is-current .player-chapter-title {
+  color: var(--player-secondary);
+}
+
+.player-chapter-number {
+  flex: 0 0 auto;
+  width: 56px; /* ATV 28dp -> 56px */
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--player-text-secondary);
+  text-align: center;
+}
+
+.player-chapter-item.is-current .player-chapter-number {
+  font-size: 40px; /* ATV PlayArrow 20dp -> 40px */
+  color: var(--player-secondary);
+}
+
+.player-chapter-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px; /* ATV 4dp -> 8px */
+}
+
+.player-chapter-title {
+  font-size: 32px; /* ATV titleMedium 16sp -> 32px */
+  font-weight: 600;
+  line-height: 1.5; /* ATV titleMedium 24sp -> 48px */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-chapter-progress-track {
+  height: 8px; /* ATV 4dp -> 8px */
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+
+.player-chapter-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--player-secondary);
+}
+
+.player-chapter-time {
+  flex: 0 0 auto;
+  font-size: 28px; /* ATV bodyMedium 14sp -> 28px */
+  color: var(--player-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ATV ProgressBar: 2dp dark chapter marks drawn over the fill. */
+.player-chapter-marks {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.player-chapter-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: min(0.104vw, 4px); /* ATV 2dp -> 4px */
+  margin-left: max(-0.052vw, -2px);
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.player-seek-overlay-track {
+  position: relative;
+}
+
+/* ATV ChapterTitle: bodyMedium, white 90%, 4dp above the bar. */
+.player-chapter-current-title {
+  margin-top: min(1.25vw, 24px); /* takes the 12dp metadata spacer of the bar */
+  padding-bottom: min(0.417vw, 8px); /* ATV xs 4dp -> 8px */
+  font-size: var(--player-overlay-label-font);
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-chapter-current-title.hidden {
+  display: none;
+}
+
+.player-chapter-current-title + .player-progress-shell {
+  margin-top: 0;
+}
+
+.player-chapter-current-title.hidden + .player-progress-shell {
+  margin-top: min(1.25vw, 24px);
+}
+
+.player-seek-overlay .player-chapter-current-title {
+  margin-top: 0;
 }

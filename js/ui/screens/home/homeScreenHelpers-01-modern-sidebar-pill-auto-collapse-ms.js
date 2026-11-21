@@ -195,8 +195,12 @@ export function isDirectionalKeyCode(code) {
   return code >= 37 && code <= 40;
 }
 
-export const HOME_LAZY_IMAGE_SELECTOR =
-  ".home-main .content-poster[data-src], .home-main .home-poster-landscape-logo[data-src], .home-main .home-continue-bg[data-src]";
+// Matches home artwork in every state, loaded or still waiting. The index
+// built from this drives hydration and eviction alike, and eviction needs the
+// images that already hold a decoded bitmap, so narrowing it to [data-src]
+// would hide every poster the moment it painted.
+export const HOME_LAZY_IMAGE_LIFECYCLE_SELECTOR =
+  ".home-main .content-poster, .home-main .home-poster-landscape-logo, .home-main .home-continue-bg";
 
 export const HOME_LAZY_IMAGE_ROW_SELECTOR = ".home-row, .home-modern-row, .home-grid-section, .home-row-continue";
 
@@ -238,12 +242,12 @@ export function renderHeroBackdropImage(display) {
   }
   const fallbackQueue = encodeHeroBackdropFallbacks(display.backdropFallbacks || []);
   const fallbackAttribute = fallbackQueue ? ` data-fallback-srcs="${escapeAttribute(fallbackQueue)}"` : "";
-  return `<img class="home-hero-backdrop" src="${escapeAttribute(display.backdrop)}"${fallbackAttribute} alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" onerror="${buildImageFallbackErrorHandler()}" />`;
+  return `<img class="home-hero-backdrop" src="${escapeAttribute(display.backdrop)}"${fallbackAttribute} alt="" decoding="async" fetchpriority="high" onerror="${buildImageFallbackErrorHandler()}" />`;
 }
 
 export function buildModernHomeSizingStyle(layoutPrefs = {}) {
   const baseWidthDp = Math.max(72, Number(layoutPrefs?.posterCardWidthDp ?? 126) || 126);
-  const radiusDp = Math.max(0, Number(layoutPrefs?.posterCardCornerRadiusDp ?? 12) || 12);
+  const radiusDp = Math.max(0, Number(layoutPrefs?.posterCardCornerRadiusDp ?? 12));
   const dpToPx = 2;
   const portraitWidth = Math.round(baseWidthDp * 0.84 * 1.08 * dpToPx);
   const portraitHeight = Math.round(baseWidthDp * 1.5 * 0.84 * 1.08 * dpToPx);

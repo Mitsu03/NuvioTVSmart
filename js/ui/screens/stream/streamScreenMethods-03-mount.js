@@ -1,3 +1,4 @@
+import { activeStreamLinkProfile } from "../../../data/local/streamLinkCacheStore.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./streamScreen.js";
 
@@ -24,6 +25,8 @@ export function createStreamScreenMethods03() {
       this.container = document.getElementById("stream");
       ScreenUtils.show(this.container);
       this.params = params || {};
+      this.bindStreamParty();
+      this.streamLinkCacheProfileId = activeStreamLinkProfile();
       this.streamBackNavigationInProgress = false;
       this.stopStreamVirtualization();
       this.streamVirtualHeights = new Map();
@@ -31,7 +34,9 @@ export function createStreamScreenMethods03() {
       this.streamLastNavigationRepeatAt = 0;
       this.loadToken = (this.loadToken || 0) + 1;
       const token = this.loadToken;
-      this.focusState = { zone: "filter", index: 0 };
+      this.focusState = { zone: "filter", index: 1 };
+      this.streamUserMovedFocus = false;
+      this.streamInitialResultFocusAssigned = false;
       this.listScrollTop = 0;
       this.error = "";
       this.loading = true;
@@ -103,11 +108,13 @@ export function createStreamScreenMethods03() {
           ? navigationContext.restoredState
           : null;
       if (restored) {
+        this.streamUserMovedFocus = true;
+        this.streamInitialResultFocusAssigned = true;
         this.loading = Boolean(restored.loading);
         this.error = String(restored.error || "");
         this.streams = Array.isArray(restored.streams) ? restored.streams.map((stream) => ({ ...stream })) : [];
         this.addonFilter = String(restored.addonFilter || "all");
-        this.focusState = restored.focusState ? { ...restored.focusState } : { zone: "filter", index: 0 };
+        this.focusState = restored.focusState ? { ...restored.focusState } : { zone: "filter", index: 1 };
         this.sourceChips = Array.isArray(restored.sourceChips) ? restored.sourceChips.map((chip) => ({ ...chip })) : [];
         this.addonLogoLookup =
           restored.addonLogoLookup && typeof restored.addonLogoLookup === "object"
@@ -150,6 +157,8 @@ export function createStreamScreenMethods03() {
         }
         return;
       }
+
+      if (!navigationContext?.isBackNavigation && this.tryResumeCachedStreamLink()) return;
 
       // Match Android's initial stream load: reuse the repository-owned session
       // when its request key is still valid. Explicit refresh actions remain the

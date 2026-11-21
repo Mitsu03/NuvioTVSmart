@@ -1,3 +1,5 @@
+import { renderAmbientSection } from "./settingsAmbientSection.js";
+import { renderWatchPartySection } from "./settingsWatchPartySection.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./settingsScreenContext.js";
 
@@ -182,18 +184,20 @@ export function createSettingsScreenMethods12() {
     renderSection(section, model) {
       if (section.id === "account") return this.renderAccountSection(model);
       if (section.id === "profiles") return this.renderProfilesSection(model);
+      if (section.id === "watchParty") return renderWatchPartySection.call(this);
       if (section.id === "appearance") return this.renderAppearanceSection(model);
+      if (section.id === "ambient") return renderAmbientSection.call(this);
       if (section.id === "layout") return this.renderLayoutSection(model);
       if (section.id === "contentDiscovery") return this.renderContentDiscoverySection();
       if (section.id === "plugins") return this.renderPluginsSection(model);
       if (section.id === "integration") return this.renderIntegrationSection(model);
       if (section.id === "streams") return this.renderStreamsSection(model);
       if (section.id === "playback") return this.renderPlaybackSection(model);
-      if (section.id === "trakt") return this.renderTraktLauncher(model);
+      if (section.id === "trakt") return this.renderTrackingSection();
       if (section.id === "advanced") return this.renderAdvancedSection(model);
       return this.renderAboutSection(model);
     },
-    async render({ refreshModel = true } = {}) {
+    async render({ refreshModel = true, skipUnchangedContent = false } = {}) {
       if (refreshModel || !this.model) {
         this.model = await this.collectModel();
       }
@@ -227,11 +231,9 @@ export function createSettingsScreenMethods12() {
         const enterClass = ScreenUtils.routeEnterClass(this, this.settingsRouteEnterPending, " settings-route-enter");
         shell.classList.toggle("settings-route-enter", enterClass === " settings-route-enter");
         shell.classList.toggle("tizen-fade-enter", enterClass === " tizen-fade-enter");
-        if (enterClass === " settings-route-enter") {
-          // Restart the enter animation. Skipped on fast-path runtimes: the
-          // read forces a sync layout on every settings open.
-          void shell.offsetWidth;
-        }
+        // No reflow to restart the enter animation: cleanup empties the
+        // container, so the shell is new here and its animation starts on the
+        // first style pass. The forced layout cost every settings open.
       }
 
       const rootSidebarSlot = this.container.querySelector("[data-settings-root-sidebar]");
@@ -275,22 +277,34 @@ export function createSettingsScreenMethods12() {
         this.restoreRailScrollTop = null;
       }
       updateSettingsRailIndicatorsSoon(navSlot);
-      updateSettingsScrollIndicatorsSoon(navSlot);
 
       const sectionChanged = this.renderedSectionId !== section.id;
-      const previousScrollState = !sectionChanged ? captureSettingsScrollState(contentSlot) : null;
       this.renderedSectionId = section.id;
       if (contentSlot) {
-        contentSlot.innerHTML = this.renderSection(section, this.model);
-        if (previousScrollState) {
-          restoreSettingsScrollState(contentSlot, previousScrollState);
-        }
-        if (sectionChanged) {
-          contentSlot.classList.remove("is-section-transitioning");
-          void contentSlot.offsetWidth;
-          contentSlot.classList.add("is-section-transitioning");
-        } else {
-          contentSlot.classList.remove("is-section-transitioning");
+        // Always build the markup: it also registers the section's actions.
+        const sectionHtml = this.renderSection(section, this.model);
+        const hadContent = Boolean(contentSlot.firstElementChild);
+        // The mount-time background refresh usually yields the same section;
+        // rebuilding it only re-ran the scroll capture and a full restyle.
+        const contentUnchanged = skipUnchangedContent && hadContent && !sectionChanged && this.renderedSectionHtml === sectionHtml;
+        if (!contentUnchanged) {
+          // A freshly mounted slot has no scroll position to keep.
+          const previousScrollState = !sectionChanged && hadContent ? captureSettingsScrollState(contentSlot) : null;
+          contentSlot.innerHTML = sectionHtml;
+          this.renderedSectionHtml = sectionHtml;
+          if (previousScrollState) {
+            restoreSettingsScrollState(contentSlot, previousScrollState);
+          }
+          if (sectionChanged) {
+            contentSlot.classList.remove("is-section-transitioning");
+            if (hadContent) {
+              // Restart the transition on reused content; new content animates anyway.
+              void contentSlot.offsetWidth;
+            }
+            contentSlot.classList.add("is-section-transitioning");
+          } else {
+            contentSlot.classList.remove("is-section-transitioning");
+          }
         }
       }
 

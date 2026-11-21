@@ -1,3 +1,4 @@
+import { MediaServerRepository } from "../../../data/mediaserver/mediaServerRepository.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./libraryScreen.js";
 
@@ -6,6 +7,7 @@ export function createLibraryScreenMethods02() {
 
   return {
     renderPickerGroups(state) {
+      if (state.viewMode === LIBRARY_VIEW_MODE.SERVERS) return `<section id="libraryPickerGroupsMount"></section>`;
       if (state.viewMode === LIBRARY_VIEW_MODE.CLOUD) {
         const providerLabel =
           state.availableCloudProviders.find((option) => option.key === state.selectedCloudProviderId)?.label ||
@@ -102,6 +104,18 @@ export function createLibraryScreenMethods02() {
         `;
     },
     renderLibraryContentArea(state) {
+      if (state.viewMode === LIBRARY_VIEW_MODE.SERVERS) {
+        const rows = MediaServerRepository.connections()
+          .filter((connection) => connection.enabled)
+          .map((connection) => {
+            const libraries = connection.libraries.filter((library) => library.selected);
+            if (!libraries.length) return "";
+            return `<section class="library-grid-wrap"><h3>${escapeHtml(connection.name)}</h3><div class="library-view-mode-row">${libraries.map((library) => `<button class="library-view-mode-button focusable" data-action="openServerLibrary" data-connection-id="${escapeHtml(connection.id)}" data-library-id="${escapeHtml(library.id)}">${escapeHtml(library.name)}</button>`).join("")}</div></section>`;
+          })
+          .filter(Boolean)
+          .join("");
+        return `<div id="libraryContentAreaMount">${rows || `<section class="library-empty-state"><h3>${escapeHtml(t("library_servers_empty_title", {}, "No media servers"))}</h3><p>${escapeHtml(t("library_servers_empty_message", {}, "Connect a server in Settings."))}</p></section>`}</div>`;
+      }
       if (state.viewMode === LIBRARY_VIEW_MODE.CLOUD) {
         return `
             <div id="libraryContentAreaMount">
@@ -124,6 +138,7 @@ export function createLibraryScreenMethods02() {
     renderViewModeTabs(state) {
       return `
           <div class="library-view-mode-row">
+            <button class="library-view-mode-button focusable${state.viewMode === LIBRARY_VIEW_MODE.SERVERS ? " selected" : ""}" data-action="selectLibraryViewMode" data-view-mode="servers">${escapeHtml(t("library_source_servers", {}, "Servers"))}</button>
             <button class="library-view-mode-button focusable${state.viewMode === LIBRARY_VIEW_MODE.SAVED ? " selected" : ""}"
                     data-action="selectLibraryViewMode" data-view-mode="saved">
               ${escapeHtml(t("library_source_saved", {}, "Saved"))}

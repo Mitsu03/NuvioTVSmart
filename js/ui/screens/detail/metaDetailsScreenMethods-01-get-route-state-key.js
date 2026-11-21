@@ -1,3 +1,4 @@
+import { detailShuffleSettings } from "./detailEpisodeShuffle.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./metaDetailsScreenContext.js";
 
@@ -28,6 +29,7 @@ export function createMetaDetailsScreenMethods01() {
         isMarkedWatched: Boolean(this.isMarkedWatched),
         episodes: Array.isArray(this.episodes) ? [...this.episodes] : [],
         castItems: Array.isArray(this.castItems) ? [...this.castItems] : [],
+        detailEnrichmentComplete: this.detailEnrichmentComplete === true,
         moreLikeThisItems: Array.isArray(this.moreLikeThisItems) ? [...this.moreLikeThisItems] : [],
         moreLikeThisSource: this.moreLikeThisSource || null,
         collectionItems: Array.isArray(this.collectionItems) ? [...this.collectionItems] : [],
@@ -47,6 +49,7 @@ export function createMetaDetailsScreenMethods01() {
         pendingFocusRestore: this.captureDetailFocus(),
         contentScrollTop: Number(content?.scrollTop || 0),
         trackScrollLeftByKey: captureHorizontalScrollMap(this.container),
+        episodeShuffleEnabled: detailShuffleSettings(this).enabled,
         episodeProgressEntries: Array.from(this.episodeProgressMap?.entries?.() || []),
         watchedEpisodeKeys: Array.from(this.watchedEpisodeKeys || [])
       };
@@ -64,6 +67,7 @@ export function createMetaDetailsScreenMethods01() {
       this.isMarkedWatched = Boolean(snapshot.isMarkedWatched);
       this.episodes = Array.isArray(snapshot.episodes) ? [...snapshot.episodes] : [];
       this.castItems = Array.isArray(snapshot.castItems) ? [...snapshot.castItems] : [];
+      this.detailEnrichmentComplete = snapshot.detailEnrichmentComplete === true;
       this.moreLikeThisItems = Array.isArray(snapshot.moreLikeThisItems) ? [...snapshot.moreLikeThisItems] : [];
       this.moreLikeThisSource = snapshot.moreLikeThisSource || null;
       this.collectionItems = Array.isArray(snapshot.collectionItems) ? [...snapshot.collectionItems] : [];

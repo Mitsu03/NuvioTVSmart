@@ -49,7 +49,13 @@ export function createPlayerScreenMethods25() {
     },
     buildWebOsEmbeddedHtmlSubtitleCues(track) {
       return this.getSubtitleCueArray(track?.cues)
-        .map((cue) => buildHtmlSubtitleCue(cue, this.getSubtitleCueSnapshot(cue), this.parseSubtitleCueText(cue?.text)))
+        .map((cue) =>
+          buildHtmlSubtitleCue(
+            cue,
+            this.getSubtitleCueSnapshot(cue),
+            this.parseSubtitleCueText(this.getSubtitleCueSnapshot(cue)?.text ?? cue?.text)
+          )
+        )
         .filter(Boolean);
     },
     activateWebOsEmbeddedHtmlSubtitleOverlay(track, cues, selectedIndex, overlayId) {
@@ -208,15 +214,22 @@ export function createPlayerScreenMethods25() {
       let snapshot = this.subtitleCueOriginalState.get(cue);
       if (!snapshot) {
         snapshot = {
+          text: cue.text,
           startTime: cue.startTime,
           endTime: cue.endTime,
           line: cue.line,
           lineAlign: cue.lineAlign,
           position: cue.position,
           positionAlign: cue.positionAlign,
+          vertical: cue.vertical,
           snapToLines: cue.snapToLines
         };
         this.subtitleCueOriginalState.set(cue, snapshot);
+      }
+      if (typeof cue.text === "string" && cue.text !== snapshot.text && cue.text !== snapshot.sdhLastText) {
+        snapshot.text = cue.text;
+        snapshot.sdhSource = null;
+        snapshot.sdhText = null;
       }
       return snapshot;
     },
@@ -285,7 +298,7 @@ export function createPlayerScreenMethods25() {
       // A source-authored line (including percentage positioning) belongs to
       // the subtitle itself. Keep it intact; Android applies its bottom padding
       // only when the cue has no explicit line.
-      if (hasExplicitSubtitleVerticalPosition(snapshot) || lineOffset === 0) {
+      if (hasExplicitSubtitleVerticalPosition(snapshot) || (lineOffset === 0 && String(snapshot.line) === "auto")) {
         this.restoreSubtitleCueSnapshot(cue, snapshot);
         return;
       }
@@ -298,8 +311,7 @@ export function createPlayerScreenMethods25() {
         // Ignore cue styling failures.
       }
 
-      const baseLine = Number.isFinite(Number(snapshot.line)) ? Number(snapshot.line) : -1;
-      const adjustedLine = clamp(baseLine - lineOffset, -100, 100);
+      const adjustedLine = lineOffset === 0 ? "auto" : clamp(-1 - lineOffset, -100, 100);
       try {
         cue.line = adjustedLine;
       } catch (_) {

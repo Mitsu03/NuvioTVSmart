@@ -299,7 +299,7 @@ export function createStreamScreenMethods02() {
         error: String(this.error || ""),
         streams: Array.isArray(this.streams) ? this.streams.map((stream) => ({ ...stream })) : [],
         addonFilter: String(this.addonFilter || "all"),
-        focusState: this.focusState ? { ...this.focusState } : { zone: "filter", index: 0 },
+        focusState: this.focusState ? { ...this.focusState } : { zone: "filter", index: 1 },
         sourceChips: Array.isArray(this.sourceChips) ? this.sourceChips.map((chip) => ({ ...chip })) : [],
         addonLogoLookup: this.addonLogoLookup ? { ...this.addonLogoLookup } : {},
         streamSearchCompleted: Boolean(this.streamSearchCompleted),

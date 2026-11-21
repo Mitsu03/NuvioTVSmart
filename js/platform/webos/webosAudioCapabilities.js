@@ -114,20 +114,6 @@ export function deriveWebOsAudioCapabilities({ edidType = "", dtsRestore = null 
   };
 }
 
-export function applyWebOsAudioCodecOverrides(
-  unsupportedAudioCodecs = [],
-  { forceDtsAudio = false, forceTrueHdAudio = false } = {}
-) {
-  const unsupported = new Set(unsupportedAudioCodecs);
-  if (forceDtsAudio) {
-    unsupported.delete("dts");
-  }
-  if (forceTrueHdAudio) {
-    unsupported.delete("truehd");
-  }
-  return Array.from(unsupported);
-}
-
 async function requestEdidType() {
   const result = await settleWithin(
     WebOsLunaService.request("luna://com.webos.service.config", {

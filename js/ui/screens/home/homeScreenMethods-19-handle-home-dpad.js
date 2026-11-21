@@ -1,7 +1,7 @@
 import * as internals from "./homeScreenContext.js";
 
 export function createHomeScreenMethods19() {
-  const { getLegacySidebarSelectedNode, getModernSidebarSelectedNode, getDirectionFromKeyCode } = internals;
+  const { getLegacySidebarSelectedNode, getModernSidebarSelectedNode, getDirectionFromKeyCode, MODERN_HOME_CONSTANTS, Router } = internals;
 
   return {
     handleHomeDpad(event) {
@@ -257,20 +257,38 @@ export function createHomeScreenMethods19() {
         this.homeViewportScrollFrame = 0;
       }
       if (this.boundHomeViewport && this.boundHomeViewportScrollHandler) {
-        this.boundHomeViewport.removeEventListener("scroll", this.boundHomeViewportScrollHandler);
+        this.boundHomeViewport.removeEventListener("scroll", this.boundHomeViewportScrollHandler, true);
       }
       this.boundHomeViewport = viewport || null;
       if (!viewport) {
         return;
       }
       if (!this.boundHomeViewportScrollHandler) {
-        this.boundHomeViewportScrollHandler = () => {
+        this.boundHomeViewportScrollHandler = (event) => {
+          if (event.target !== this.boundHomeViewport) {
+            // Scroll does not bubble. Capture row scrolling so bounded image
+            // prefetch follows the visible window, independently of focus.
+            const track = event.target;
+            if (track?.matches?.(".home-track, .home-grid-track") && this.shouldUseBoundedHomeImageHydration()) {
+              const anchor = track.querySelector(".focusable.focused") || track.querySelector(".focusable");
+              if (anchor) {
+                this.scheduleHomeLazyImageHydration(anchor, {
+                  viewportChanged: true,
+                  focusedRowOnly: this.isLegacyTvRuntime()
+                });
+              }
+            }
+            return;
+          }
           if (this.homeViewportScrollFrame) {
             return;
           }
           this.homeViewportScrollFrame = requestAnimationFrame(() => {
             this.homeViewportScrollFrame = 0;
             if (this.shouldSuspendModernViewportFocusSync()) {
+              // The camera tween's last scroll event lands while it is still
+              // active; without a retry the rows it revealed never hydrate.
+              this.scheduleHomeViewportSettleHydration();
               return;
             }
             this.scheduleHomeLazyImageHydration(null, {
@@ -288,7 +306,23 @@ export function createHomeScreenMethods19() {
           });
         };
       }
-      viewport.addEventListener("scroll", this.boundHomeViewportScrollHandler, { passive: true });
+      viewport.addEventListener("scroll", this.boundHomeViewportScrollHandler, { passive: true, capture: true });
+    },
+    scheduleHomeViewportSettleHydration() {
+      if (this.homeViewportSettleHydrationTimer) {
+        clearTimeout(this.homeViewportSettleHydrationTimer);
+      }
+      this.homeViewportSettleHydrationTimer = setTimeout(() => {
+        this.homeViewportSettleHydrationTimer = null;
+        if (!this.container || Router.getCurrent() !== "home") {
+          return;
+        }
+        if (this.shouldSuspendModernViewportFocusSync()) {
+          this.scheduleHomeViewportSettleHydration();
+          return;
+        }
+        this.scheduleHomeLazyImageHydration(null, { viewportChanged: true });
+      }, MODERN_HOME_CONSTANTS.verticalScrollSettlePollMs);
     }
   };
 }

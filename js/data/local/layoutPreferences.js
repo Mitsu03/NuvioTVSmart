@@ -8,16 +8,28 @@ import {
 const KEY = "layoutPreferences";
 
 const DEFAULTS = {
+  customPosterUrlPattern: "",
+  customPosterEnabledScreens: [
+    "home",
+    "continue_watching",
+    "collections",
+    "library",
+    "search",
+    "details",
+    "tv_recommendations"
+  ],
   hasChosenLayout: false,
   homeLayout: "modern",
   continueWatchingCardStyle: "card",
   heroSectionEnabled: true,
+  heroDescriptionAutoScrollEnabled: false,
   discoverLocation: "in_search",
   heroCatalogKeys: [],
   posterLabelsEnabled: true,
   catalogAddonNameEnabled: true,
   catalogTypeSuffixEnabled: true,
   modernLandscapePostersEnabled: false,
+  alwaysShowLandscapeClearlogo: false,
   modernHeroFullScreenBackdropEnabled: false,
   classicFocusGradientEnabled: false,
   focusedPosterBackdropExpandEnabled: true,
@@ -38,8 +50,10 @@ const DEFAULTS = {
   cardDepthCastEnabled: true,
   cardDepthTrailersEnabled: true,
   detailPageTrailerButtonEnabled: true,
+  trailerPlayInBackground: false,
   preferExternalMetaAddonDetail: true,
   blurUnwatchedEpisodes: false,
+  randomEpisodeEnabled: false,
   collapseSidebar: false,
   modernSidebar: false,
   modernSidebarBlur: false,
@@ -51,6 +65,7 @@ const DEFAULTS = {
   showUnairedNextUp: true,
   nextUpFromFurthestEpisode: true,
   continueWatchingSortMode: "default",
+  continueWatchingClickAction: "STREAM",
   homeImdbRatingsVisibility: "SHOW_ALL",
   detailImdbRatingsVisibility: "SHOW_ALL"
 };
@@ -71,6 +86,16 @@ function normalizeContinueWatchingSortMode(value) {
     normalized === "streamingstyle"
     ? "streaming_style"
     : "default";
+}
+
+const CONTINUE_WATCHING_CLICK_ACTIONS = ["STREAM", "DETAILS", "DETAILS_FOR_UPCOMING"];
+
+// Android ContinueWatchingClickAction: unknown values fall back to STREAM.
+export function normalizeContinueWatchingClickAction(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase();
+  return CONTINUE_WATCHING_CLICK_ACTIONS.includes(normalized) ? normalized : "STREAM";
 }
 
 function normalizeLayoutPreferences(value = {}) {
@@ -107,6 +132,11 @@ function normalizeLayoutPreferences(value = {}) {
       )
     ],
     modernLandscapePostersEnabled: Boolean(merged.modernLandscapePostersEnabled),
+    heroDescriptionAutoScrollEnabled: Boolean(merged.heroDescriptionAutoScrollEnabled),
+    continueWatchingClickAction: normalizeContinueWatchingClickAction(
+      merged.continueWatchingClickAction
+    ),
+    alwaysShowLandscapeClearlogo: Boolean(merged.alwaysShowLandscapeClearlogo),
     modernHeroFullScreenBackdropEnabled: Boolean(merged.modernHeroFullScreenBackdropEnabled),
     focusedPosterBackdropExpandEnabled: Boolean(merged.focusedPosterBackdropExpandEnabled),
     focusedPosterBackdropExpandDelaySeconds: Math.max(
@@ -121,7 +151,9 @@ function normalizeLayoutPreferences(value = {}) {
         ? "expanded_card"
         : "hero_media",
     posterCardWidthDp: Math.max(72, Number(merged.posterCardWidthDp ?? 126) || 126),
-    posterCardCornerRadiusDp: Math.max(0, Number(merged.posterCardCornerRadiusDp ?? 12) || 12),
+    posterCardCornerRadiusDp: Number.isFinite(Number(merged.posterCardCornerRadiusDp ?? 12))
+      ? Math.max(0, Number(merged.posterCardCornerRadiusDp ?? 12))
+      : 12,
     fastHorizontalNavigationEnabled: Boolean(
       value?.fastHorizontalNavigationEnabled ??
       LocalStore.get("fastHorizontalNavigationEnabled", false)
@@ -147,7 +179,9 @@ function normalizeLayoutPreferences(value = {}) {
     preferExternalMetaAddonDetail: merged.preferExternalMetaAddonDetail !== false,
     showFullReleaseDate: merged.showFullReleaseDate !== false,
     detailPageTrailerButtonEnabled: Boolean(merged.detailPageTrailerButtonEnabled),
+    trailerPlayInBackground: merged.trailerPlayInBackground === true,
     blurUnwatchedEpisodes: Boolean(merged.blurUnwatchedEpisodes),
+    randomEpisodeEnabled: Boolean(merged.randomEpisodeEnabled),
     useEpisodeThumbnailsInCw: merged.useEpisodeThumbnailsInCw !== false,
     blurContinueWatchingNextUp: Boolean(merged.blurContinueWatchingNextUp),
     continueWatchingEnabled: merged.continueWatchingEnabled !== false,
@@ -155,6 +189,16 @@ function normalizeLayoutPreferences(value = {}) {
     nextUpFromFurthestEpisode: merged.nextUpFromFurthestEpisode !== false,
     continueWatchingSortMode: normalizeContinueWatchingSortMode(merged.continueWatchingSortMode),
     homeImdbRatingsVisibility: normalizeHomeImdbRatingsVisibility(merged.homeImdbRatingsVisibility),
+    customPosterUrlPattern: String(merged.customPosterUrlPattern || "").trim(),
+    customPosterEnabledScreens: Array.isArray(merged.customPosterEnabledScreens)
+      ? [
+          ...new Set(
+            merged.customPosterEnabledScreens.filter((key) =>
+              DEFAULTS.customPosterEnabledScreens.includes(key)
+            )
+          )
+        ]
+      : DEFAULTS.customPosterEnabledScreens,
     detailImdbRatingsVisibility: normalizeDetailImdbRatingsVisibility(
       merged.detailImdbRatingsVisibility
     ),
@@ -171,17 +215,39 @@ const store = createProfileScopedStore({
   normalize: normalizeLayoutPreferences
 });
 
+// get() runs on every preference read; rewriting an unchanged root attribute
+// still invalidates every [data-card-depth] card style in Chromium.
+function setRootDataset(root, key, value) {
+  if (root.dataset[key] !== value) {
+    root.dataset[key] = value;
+  }
+}
+
 function applyCardDepthPresentation(settings) {
   const root = globalThis?.document?.documentElement;
   if (!root) return;
-  root.dataset.cardDepth = settings.cardDepthEnabled ? "true" : "false";
-  root.dataset.cardDepthPosters = settings.cardDepthPostersEnabled !== false ? "true" : "false";
-  root.dataset.cardDepthContinueWatching =
-    settings.cardDepthContinueWatchingEnabled !== false ? "true" : "false";
-  root.dataset.cardDepthEpisodes =
-    settings.cardDepthEpisodeCardsEnabled !== false ? "true" : "false";
-  root.dataset.cardDepthCast = settings.cardDepthCastEnabled !== false ? "true" : "false";
-  root.dataset.cardDepthTrailers = settings.cardDepthTrailersEnabled !== false ? "true" : "false";
+  setRootDataset(root, "cardDepth", settings.cardDepthEnabled ? "true" : "false");
+  setRootDataset(
+    root,
+    "cardDepthPosters",
+    settings.cardDepthPostersEnabled !== false ? "true" : "false"
+  );
+  setRootDataset(
+    root,
+    "cardDepthContinueWatching",
+    settings.cardDepthContinueWatchingEnabled !== false ? "true" : "false"
+  );
+  setRootDataset(
+    root,
+    "cardDepthEpisodes",
+    settings.cardDepthEpisodeCardsEnabled !== false ? "true" : "false"
+  );
+  setRootDataset(root, "cardDepthCast", settings.cardDepthCastEnabled !== false ? "true" : "false");
+  setRootDataset(
+    root,
+    "cardDepthTrailers",
+    settings.cardDepthTrailersEnabled !== false ? "true" : "false"
+  );
   const edgeStrength = settings.cardDepthEdgeStrength / 100;
   const edgeCoverage = settings.cardDepthEdgeCoverage / 100;
   root.style.setProperty("--card-depth-edge", String(edgeStrength));

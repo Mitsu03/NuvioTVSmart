@@ -76,8 +76,6 @@ import { StreamBadgeSettingsStore } from "../../../data/local/streamBadgeSetting
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
 
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
-
 import { matchStreamBadges } from "../../../core/streams/streamBadgeRules.js";
 
 import { hasReleaseToken } from "../../../core/streams/releaseToken.js";
@@ -356,6 +354,12 @@ export function streamMergeKey(item = {}) {
   const debridIdentity = streamDebridIdentity(item);
   if (debridIdentity) {
     return `debrid::${debridIdentity}`;
+  }
+  // A media server stream carries no url. It is resolved at play time from the
+  // connection, so identify it by what it is resolved from.
+  const mediaServer = (item.clientResolve || item.raw?.clientResolve)?.mediaServer;
+  if (mediaServer) {
+    return `server::${mediaServer.connectionId}::${mediaServer.itemId}::${mediaServer.mediaSourceId}`;
   }
   const locator = item.url || item.externalUrl || item.ytId || "";
   if (!locator) {

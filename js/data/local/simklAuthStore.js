@@ -1,3 +1,4 @@
+import { TraktSettingsStore } from "./traktSettingsStore.js";
 import { LocalStore } from "../../core/storage/localStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 
@@ -75,7 +76,7 @@ export const SimklAuthStore = {
 
   saveToken(accessToken, profileId = activeProfileId()) {
     const current = readProfileState(profileId);
-    return writeProfileState(profileId, {
+    const saved = writeProfileState(profileId, {
       ...current,
       accessToken,
       userCode: null,
@@ -83,6 +84,8 @@ export const SimklAuthStore = {
       expiresAt: null,
       pollInterval: 5
     });
+    if (saved.accessToken) TraktSettingsStore.providerConnected("simkl", profileId);
+    return saved;
   },
 
   saveIdentity({ username = null, accountId = null } = {}, profileId = activeProfileId()) {
@@ -102,6 +105,7 @@ export const SimklAuthStore = {
   },
 
   clearAuth(profileId = activeProfileId()) {
+    TraktSettingsStore.providerDisconnected("simkl", profileId);
     return writeProfileState(profileId, {});
   }
 };

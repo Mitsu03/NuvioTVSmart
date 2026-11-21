@@ -95,6 +95,16 @@
           "name": "safeHttpProxy",
           "description": "Proxy allowlisted account and cloud-library requests for legacy webOS",
           "public": true
+        },
+        {
+          "name": "audioTranscodeCreate",
+          "description": "Create a bounded local DTS audio conversion session",
+          "public": true
+        },
+        {
+          "name": "audioTranscodeStop",
+          "description": "Stop a local audio conversion session",
+          "public": true
         }
       ]
     }

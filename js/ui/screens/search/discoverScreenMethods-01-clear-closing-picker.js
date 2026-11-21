@@ -1,3 +1,4 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./discoverScreen.js";
 
@@ -240,7 +241,7 @@ export function createDiscoverScreenMethods01() {
     },
     async loadCatalogsAndContent() {
       const token = this.loadToken;
-      const addons = await addonRepository.getInstalledAddons();
+      const addons = await addonRepository.getInstalledAddons({ includeMediaServers: true });
       if (token !== this.loadToken) return;
 
       this.catalogs = [];
@@ -328,6 +329,7 @@ export function createDiscoverScreenMethods01() {
           : allItems;
       return renderItems.length
         ? renderItems
+            .map((item) => customPosterForItem(item, "search"))
             .map(
               (item, index) => `
                   <article class="discover-card seeall-card focusable"
@@ -346,7 +348,7 @@ export function createDiscoverScreenMethods01() {
                      <div class="seeall-card-poster-wrap">
                        ${
                          item.poster
-                           ? `<img class="seeall-card-poster-image" data-src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                           ? `<img class="seeall-card-poster-image" ${posterFallbackAttributes(item)} data-src="${escapeHtml(item.poster)}" alt="" loading="lazy" decoding="async" />`
                            : `<div class="seeall-card-poster placeholder"></div>`
                        }
                        ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}

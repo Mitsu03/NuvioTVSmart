@@ -99,6 +99,7 @@ export function createSearchScreenMethods01() {
       this.rowFocusedIndexByKey =
         snapshot?.rowFocusedIndexByKey && typeof snapshot.rowFocusedIndexByKey === "object" ? { ...snapshot.rowFocusedIndexByKey } : {};
       this.pendingAutoFocusResults = false;
+      this.resultsQuery = null;
       this.restoredFocusedDescriptor = snapshot
         ? {
             action: String(snapshot.focusedAction || ""),
@@ -173,6 +174,8 @@ export function createSearchScreenMethods01() {
       ScreenUtils.show(this.container);
       this.searchRouteEnterPending = true;
       this.activationGuardUntil = Date.now() + 220;
+      this.lastSearchInputWasVoice = false;
+      this.searchBackToFieldLatched = false;
       this.layoutPrefs = LayoutPreferences.get();
       const sidebarProfilePromise = getSidebarProfileState().catch((err) => {
         console.warn("Search sidebar profile failed to load", err);
@@ -204,6 +207,7 @@ export function createSearchScreenMethods01() {
       this.voiceRecognition = this.voiceRecognition || null;
       this.searchToastTimer = null;
       this.inputSearchTimer = null;
+      this.imeDismissed = false;
       this.posterOptionsMenu = null;
       this.posterOptionsController = null;
       this.pendingPosterOptionsFocusId = "";
@@ -282,13 +286,15 @@ export function createSearchScreenMethods01() {
     },
     async reloadRows() {
       const token = this.loadToken;
+      const query = this.query;
       let rows;
       if (this.mode === "search" && this.query.length >= 2) {
-        rows = await this.searchRows(this.query, {
+        rows = await this.searchRows(query, {
           token,
           onFirstResults: (rows) => {
             if (token !== this.loadToken) return;
             this.rows = rows;
+            this.resultsQuery = query;
             if (this.shouldPatchResultsWithoutReplacingInput()) {
               this.renderResultsOnly();
               return;
@@ -303,6 +309,7 @@ export function createSearchScreenMethods01() {
       }
       if (token !== this.loadToken) return;
       this.rows = rows;
+      this.resultsQuery = query;
       void this.refreshWatchedTitleIds().then(() => {
         if (token === this.loadToken && Router.getCurrent() === "search") {
           if (this.shouldPatchResultsWithoutReplacingInput()) {
@@ -329,7 +336,8 @@ export function createSearchScreenMethods01() {
         this.requestRender();
         return;
       }
-      const preserveInputEditing = document.activeElement === input;
+      const preserveInputEditing =
+        document.activeElement === input || Boolean(this.imeDismissed && this.container?.querySelector(".focusable.focused") === input);
       const selectionSnapshot = preserveInputEditing ? null : getInputSelectionSnapshot(input);
 
       while (header.nextSibling) {

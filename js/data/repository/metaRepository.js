@@ -1,7 +1,9 @@
+import { MediaServerRepository, parseServerItem } from "../mediaserver/mediaServerRepository.js";
 import { safeApiCall } from "../../core/network/safeApiCall.js";
 import { addonRepository } from "./addonRepository.js";
 import { MetaApi } from "../remote/api/metaApi.js";
 import { withSimklReleaseDates } from "./simklEpisodeReleaseDates.js";
+import { normalizeTmdbLogoUrl } from "../../core/tmdb/tmdbImageUrl.js";
 
 const INSTALLED_ADDONS_WAIT_MS = 750;
 
@@ -29,6 +31,17 @@ class MetaRepository {
   }
 
   async getMeta(addonBaseUrl, type, id) {
+    if (String(addonBaseUrl || "").startsWith("nuvio-server://")) {
+      if (!parseServerItem(id)) return { status: "error", message: "servers_failure_not_found" };
+      try {
+        const data = await MediaServerRepository.meta(id);
+        return data
+          ? { status: "success", data }
+          : { status: "error", message: "servers_failure_not_found" };
+      } catch (_) {
+        return { status: "error", message: "servers_failure_unreachable" };
+      }
+    }
     const requestedType = String(type || "").trim();
     const normalizedId = String(id || "").trim();
     const inferredType = this.inferCanonicalType(requestedType, normalizedId);
@@ -89,6 +102,16 @@ class MetaRepository {
   }
 
   async getMetaFromAllAddons(type, id, sourceAddonBaseUrl = null) {
+    if (parseServerItem(id)) {
+      try {
+        const data = await MediaServerRepository.meta(id);
+        return data
+          ? { status: "success", data }
+          : { status: "error", message: "servers_failure_not_found" };
+      } catch (_) {
+        return { status: "error", message: "servers_failure_unreachable" };
+      }
+    }
     const requestedType = String(type || "").trim();
     const inferredType = this.inferCanonicalType(requestedType, id);
     const cacheKey = `all:${inferredType.toLowerCase()}:${String(id || "").trim()}`;
@@ -101,7 +124,7 @@ class MetaRepository {
     }
 
     const request = (async () => {
-      const addons = await addonRepository.getInstalledAddons();
+      const addons = await addonRepository.getInstalledAddons({ includeMediaServers: true });
       const normalizedSourceUrl = sourceAddonBaseUrl
         ? addonRepository.canonicalizeUrl(sourceAddonBaseUrl)
         : "";
@@ -257,6 +280,7 @@ class MetaRepository {
     }
     try {
       const addons = await addonRepository.getInstalledAddons({
+        includeMediaServers: true,
         timeoutMs: INSTALLED_ADDONS_WAIT_MS
       });
       const target = addonRepository.canonicalizeUrl(addonBaseUrl);
@@ -328,7 +352,7 @@ class MetaRepository {
       name: normalizeDisplayText(meta.name || "Untitled"),
       poster: meta.poster || null,
       background: meta.background || null,
-      logo: meta.logo || null,
+      logo: normalizeTmdbLogoUrl(meta.logo) || null,
       description: normalizeDisplayText(meta.description || ""),
       genres: Array.isArray(meta.genres)
         ? meta.genres.map((genre) => normalizeDisplayText(genre))

@@ -1,7 +1,9 @@
+import { registerHomeDomNodes } from "./homeDomUpdate.js";
 import * as internals from "./homeScreenContext.js";
+import { getTrailerMountGraceMs } from "../../../platform/tvPerformancePolicy.js";
 
 export function createHomeScreenMethods14() {
-  const { limitTextToWordCount, applyTrailerAudioPreferences } = internals;
+  const { applyTrailerAudioPreferences, getTvRuntimePerformanceProfile } = internals;
 
   return {
     async activateFocusedPosterFlow(node, flowToken = Number(this.focusedPosterFlowToken || 0)) {
@@ -37,6 +39,21 @@ export function createHomeScreenMethods14() {
         });
         if (Number(this.focusedPosterFlowToken || 0) !== Number(flowToken || 0) || !node.classList.contains("focused")) {
           return;
+        }
+      }
+      const mountGraceMs = getTrailerMountGraceMs(getTvRuntimePerformanceProfile());
+      if (mountGraceMs > 0) {
+        // Modern TVs defer the YouTube iframe mount until focus has been quiet
+        // for a moment. Constrained generations keep the previous timing.
+        const sinceNavigation = Date.now() - Number(this.lastModernHeroNavAt || 0);
+        const remainingGraceMs = mountGraceMs - sinceNavigation;
+        if (remainingGraceMs > 0) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, remainingGraceMs);
+          });
+          if (Number(this.focusedPosterFlowToken || 0) !== Number(flowToken || 0) || !node.classList.contains("focused")) {
+            return;
+          }
         }
       }
 
@@ -106,6 +123,19 @@ export function createHomeScreenMethods14() {
       if (!this.container) {
         return;
       }
+      if (this.layoutMode === "modern") {
+        // Measuring here forced a layout in the middle of every hero update,
+        // two or three times per focus: 17 ms each on a 2025 OLED. The previous
+        // bounds stay applied meanwhile and CSS clamps the text, so one
+        // measurement at the start of the next frame is enough.
+        if (!this.homeHeroBoundsFrame) {
+          this.homeHeroBoundsFrame = requestAnimationFrame(() => {
+            this.homeHeroBoundsFrame = 0;
+            this.applyModernHeroDescriptionBounds(this.container);
+          });
+        }
+        return;
+      }
       // Tizen fast path: the binary-search textContent loop below forces
       // dozens of reflows per render. Fast-path runtimes already get pure
       // CSS ellipsis/line-clamp (see components-45.css), so skip the JS pass.
@@ -135,10 +165,12 @@ export function createHomeScreenMethods14() {
       if (!this.container) {
         return;
       }
-      const modernHeroDescriptionWordLimit = 40;
       const root = this.homeTruncationScope || this.container;
       this.homeTruncationScope = null;
       this.applyModernHeroDescriptionBounds(root);
+      if (this.layoutMode === "modern") {
+        return;
+      }
       // Modern Home hides .home-poster-copy; classic/grid still render those
       // labels and therefore keep the measured truncation path.
       const truncationSelector =
@@ -152,18 +184,15 @@ export function createHomeScreenMethods14() {
         const storedText = node.dataset.fullText || "";
         const shouldRefresh = !storedText || (currentText && currentText !== storedText && !currentText.trim().endsWith("..."));
         const sourceText = shouldRefresh ? currentText : storedText;
-        const isModernHeroDescription = node.classList.contains("home-hero-description") && Boolean(node.closest(".home-modern-hero-copy"));
-        const { text: fullText, truncated: wordTrimmed } = isModernHeroDescription
-          ? limitTextToWordCount(sourceText, modernHeroDescriptionWordLimit)
-          : { text: sourceText, truncated: false };
+        const fullText = sourceText;
         if (!fullText) {
           return;
         }
         node.dataset.fullText = fullText;
-        node.textContent = wordTrimmed ? `${fullText}...` : fullText;
+        node.textContent = fullText;
         const fits = node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1;
         if (fits) {
-          node.classList.toggle("is-truncated", wordTrimmed);
+          node.classList.remove("is-truncated");
           return;
         }
 
@@ -184,6 +213,7 @@ export function createHomeScreenMethods14() {
         node.textContent = finalText;
         node.classList.add("is-truncated");
       });
+      registerHomeDomNodes(Array.from(nodes).filter((node) => node instanceof HTMLElement));
     },
     applyModernHeroDescriptionBounds(root = null) {
       if (!this.container || this.layoutMode !== "modern") {
@@ -198,9 +228,6 @@ export function createHomeScreenMethods14() {
           return;
         }
 
-        description.style.maxHeight = "";
-        description.style.webkitLineClamp = "";
-        description.style.lineClamp = "";
         if (description.classList.contains("is-empty")) {
           return;
         }
@@ -209,7 +236,24 @@ export function createHomeScreenMethods14() {
         const lineHeight = parseFloat(descriptionStyle.lineHeight || "0") || 0;
         const fontSize = parseFloat(descriptionStyle.fontSize || "0") || 0;
         const lineBoxHeight = Math.max(1, Math.ceil(lineHeight || fontSize * 1.35 || description.offsetHeight || 1));
-        description.style.maxHeight = `${lineBoxHeight * modernHeroDescriptionMaxLines}px`;
+        const copy = description.closest(".home-modern-hero-copy");
+        const siblings = copy
+          ? Array.from(copy.children).filter((node) => node !== description && getComputedStyle(node).display !== "none")
+          : [];
+        const spacing = copy ? parseFloat(getComputedStyle(copy).rowGap || "0") || 0 : 0;
+        const occupiedHeight = siblings.reduce((height, node) => height + node.getBoundingClientRect().height, 0);
+        const availableHeight = copy
+          ? copy.clientHeight - occupiedHeight - spacing * siblings.length
+          : lineBoxHeight * modernHeroDescriptionMaxLines;
+        const lines = Math.min(modernHeroDescriptionMaxLines, Math.max(0, Math.floor(availableHeight / lineBoxHeight)));
+        const maxHeight = `${lineBoxHeight * lines}px`;
+        const lineClamp = String(Math.max(1, lines));
+        if (description.style.maxHeight !== maxHeight) {
+          description.style.maxHeight = maxHeight;
+        }
+        if (description.style.webkitLineClamp !== lineClamp) {
+          description.style.webkitLineClamp = lineClamp;
+        }
       });
     },
     ensureHomeTruncationObservers() {

@@ -195,7 +195,7 @@ export {
   MODERN_SIDEBAR_PILL_AUTO_COLLAPSE_MS,
   CW_RELEASE_ALERT_MAX_AGE_MS,
   isDirectionalKeyCode,
-  HOME_LAZY_IMAGE_SELECTOR,
+  HOME_LAZY_IMAGE_LIFECYCLE_SELECTOR,
   HOME_LAZY_IMAGE_ROW_SELECTOR,
   homePerfNow,
   logHomePerf,
@@ -358,3 +358,7 @@ export {
 } from "./homeScreenHelpers-14-get-home-grid-column-count.js";
 
 export { createPosterCardMarkup } from "./homeScreenHelpers-15-create-poster-card-markup.js";
+
+export { PlayerSettingsStore } from "../../../data/local/playerSettingsStore.js";
+
+export { isAutoPlayEffectivelyEnabled } from "../../../core/streams/streamAutoPlaySelector.js";

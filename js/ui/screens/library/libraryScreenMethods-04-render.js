@@ -36,7 +36,7 @@ export function createLibraryScreenMethods04() {
       const posterRadius = 24;
       const libraryStyle = `--library-poster-width:${posterWidth}px;--library-poster-height:${Math.round(posterWidth * 1.5)}px;--library-poster-radius:${posterRadius}px;`;
       const hasLibraryItems = Array.isArray(state.allItems) && state.allItems.length > 0;
-      if (state.isLoading || (state.isSyncing && !hasLibraryItems)) {
+      if (state.viewMode !== "servers" && (state.isLoading || (state.isSyncing && !hasLibraryItems))) {
         this.renderLoading();
         ScreenUtils.indexFocusables(this.container);
         if (!this.layoutPrefs?.modernSidebar) {
@@ -260,7 +260,7 @@ export function createLibraryScreenMethods04() {
         selector = ".library-cloud-search-input.focusable";
       } else if (this.lastMainFocus?.matches?.(".library-picker-anchor")) {
         selector = this.getMainFocusSelector(this.lastMainFocus);
-      } else if (this.lastMainFocus?.dataset?.action) {
+      } else if (this.lastMainFocus?.dataset?.action && !this.lastMainFocus.dataset.focusKey) {
         selector = this.getMainFocusSelector(this.lastMainFocus);
       } else if (state.lastFocusedPosterKey) {
         selector = `.library-grid-card[data-focus-key="${selectorValue(state.lastFocusedPosterKey)}"]`;

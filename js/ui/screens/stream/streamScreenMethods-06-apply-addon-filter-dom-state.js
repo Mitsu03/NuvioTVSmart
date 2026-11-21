@@ -1,5 +1,7 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./streamScreen.js";
+import { focusWithoutScroll } from "../../navigation/focusWithoutScroll.js";
+import { startStreamBadgeMarquee, stopStreamBadgeMarquee } from "./streamBadgeMarquee.js";
 
 export function createStreamScreenMethods06() {
   const { ScreenUtils, Environment, isStreamEmptyStateVisible, clamp } = internals;
@@ -60,10 +62,7 @@ export function createStreamScreenMethods06() {
         });
       });
 
-      // Appending existing keyed rows changes only their order; it does not
-      // reparse the card markup. This is the Web equivalent of Android's
-      // LazyColumn retaining keyed items while the filtered state changes.
-      visibleRows.forEach((row) => list.appendChild(row));
+      // Filters are subsequences of allStreams, so keep the existing DOM order.
 
       this.container?.querySelectorAll(".stream-route-chip[data-addon]").forEach((chip) => {
         const selected = String(chip.dataset.addon || "all") === targetFilter;
@@ -73,7 +72,7 @@ export function createStreamScreenMethods06() {
 
       const loadingRow = list.querySelector("[data-stream-loading-row]");
       if (loadingRow) {
-        const visible = this.hasPendingSourceLoads(targetFilter);
+        const visible = this.hasPendingSourceLoads(targetFilter) || (!visibleStreams.length && this.hasPendingSourceLoads("all"));
         loadingRow.hidden = !visible;
         loadingRow.style.display = visible ? "" : "none";
       }
@@ -86,12 +85,6 @@ export function createStreamScreenMethods06() {
         });
         emptyState.hidden = !visible;
         emptyState.style.display = visible ? "" : "none";
-      }
-      if (loadingRow) {
-        list.appendChild(loadingRow);
-      }
-      if (emptyState) {
-        list.appendChild(emptyState);
       }
       return true;
     },
@@ -178,14 +171,12 @@ export function createStreamScreenMethods06() {
           : this.container?.querySelector(".focusable.focused");
       if (previous && previous !== target) {
         previous.classList.remove("focused");
+        stopStreamBadgeMarquee(previous.closest(".stream-route-card-row"));
       }
       target.classList.add("focused");
       this.focusedElement = target;
-      try {
-        target.focus({ preventScroll: true });
-      } catch (_) {
-        target.focus();
-      }
+      startStreamBadgeMarquee(target.closest(".stream-route-card-row"));
+      focusWithoutScroll(target);
 
       const chipTrack = target.closest(".stream-route-chip-track");
       if (chipTrack) {

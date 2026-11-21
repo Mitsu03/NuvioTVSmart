@@ -1,9 +1,16 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./settingsScreenContext.js";
 
+// A color sample for an option; only #RRGGBB values reach the style attribute.
+function renderOptionSwatch(color) {
+  const hex = /^#[0-9A-F]{6}$/i.test(String(color || "")) ? String(color) : "";
+  return hex ? `<span class="settings-dialog-option-swatch" style="background-color:${hex}" aria-hidden="true"></span>` : "";
+}
+
 export function createSettingsScreenMethods02() {
   const {
     ThemeColors,
+    isContentRtl,
     ROW_ICONS,
     clamp,
     t,
@@ -34,7 +41,7 @@ export function createSettingsScreenMethods02() {
       const trailing = external ? "external" : icon;
       const tailContent = [
         planned ? `<span class="settings-row-badge">${escapeHtml(t("common.soon"))}</span>` : "",
-        value ? `<span class="settings-row-value">${escapeHtml(value)}</span>` : "",
+        value ? `<bdi class="settings-row-value" dir="${isContentRtl(String(value)) ? "rtl" : "ltr"}">${escapeHtml(value)}</bdi>` : "",
         trailing ? iconSvg(ROW_ICONS[trailing], `settings-row-icon${external ? " is-external" : ""}`) : ""
       ]
         .filter(Boolean)
@@ -54,6 +61,21 @@ export function createSettingsScreenMethods02() {
           </button>
         `;
     },
+    renderInformationRow({ title, subtitle = "", value = "" }) {
+      return `
+          <div class="settings-action-row settings-info-row">
+            <span class="settings-row-copy">
+              <span class="settings-row-title">${escapeHtml(title)}</span>
+              ${subtitle ? `<span class="settings-row-subtitle">${escapeHtml(subtitle)}</span>` : ""}
+            </span>
+            ${
+              value
+                ? `<span class="settings-row-tail"><bdi class="settings-row-value" dir="${isContentRtl(String(value)) ? "rtl" : "ltr"}">${escapeHtml(value)}</bdi></span>`
+                : ""
+            }
+          </div>
+        `;
+    },
     renderToggleRow({ focusKey, title, subtitle = "", checked = false, disabled = false, planned = false }) {
       const inert = disabled || planned;
       return `
@@ -61,6 +83,7 @@ export function createSettingsScreenMethods02() {
                   data-zone="content"
                   aria-disabled="${inert ? "true" : "false"}"
                   ${this.registerAction(focusKey, inert ? () => {} : this.actionMap.get(focusKey))}
+                  role="switch" aria-checked="${checked ? "true" : "false"}"
                   data-role="toggle">
             <span class="settings-row-copy">
               <span class="settings-row-title">${escapeHtml(title)}</span>
@@ -82,7 +105,7 @@ export function createSettingsScreenMethods02() {
       const swatchBackground = palette["--accent-gradient"] || theme.color;
       const swatchCheckColor = theme.onColor || palette["--on-secondary"] || "#fff";
       return `
-          <button class="settings-theme-card settings-content-focusable focusable${selectedClass}"
+          <button class="settings-theme-card settings-content-focusable focusable${selectedClass}" role="radio" aria-checked="${selected ? "true" : "false"}"
                   data-zone="content"
                   ${this.registerAction(focusKey, this.actionMap.get(focusKey))}>
             <span class="settings-theme-swatch-wrap">
@@ -96,7 +119,7 @@ export function createSettingsScreenMethods02() {
     },
     renderLayoutCard(option, selected, focusKey) {
       return `
-          <button class="settings-layout-card settings-content-focusable focusable${selected ? " is-selected" : ""}"
+          <button class="settings-layout-card settings-content-focusable focusable${selected ? " is-selected" : ""}" role="radio" aria-checked="${selected ? "true" : "false"}"
                   data-zone="content"
                   ${this.registerAction(focusKey, this.actionMap.get(focusKey))}>
             ${renderLayoutPreviewPlaceholderMarkup()}
@@ -208,6 +231,8 @@ export function createSettingsScreenMethods02() {
       title,
       value = "",
       multiline = false,
+      secret = false,
+      inputType = "text",
       placeholder = "",
       returnFocusKey,
       saveLabel = t("common.save", {}, "Save"),
@@ -222,6 +247,8 @@ export function createSettingsScreenMethods02() {
         value: String(value ?? ""),
         draft: String(value ?? ""),
         multiline: Boolean(multiline),
+        secret: Boolean(secret),
+        inputType,
         placeholder,
         returnFocusKey,
         saveLabel,
@@ -243,20 +270,31 @@ export function createSettingsScreenMethods02() {
       const onClose = this.optionDialog.onClose;
       this.optionDialog = null;
       if (typeof onClose === "function") onClose();
+      // onClose may open the dialog it came from again (a value list back to its editor).
+      if (this.optionDialog) {
+        return;
+      }
       this.focusZone = "content";
     },
-    closeTextDialog() {
+    closeTextDialog({ restoreEditor = true } = {}) {
       if (!this.textDialog) {
         return;
       }
       this.contentFocusKey = this.textDialog.returnFocusKey || this.contentFocusKey;
-      const restoreCustomThemeEditor = Boolean(this.textDialog.restoreCustomThemeEditor && this.customThemeDraft);
+      const restoreCustomThemeEditor = Boolean(restoreEditor && this.textDialog.restoreCustomThemeEditor && this.customThemeDraft);
       this.textDialog = null;
       if (restoreCustomThemeEditor) {
         this.showCustomThemeEditorDialog();
         return;
       }
       this.focusZone = "content";
+    },
+    dismissDialogsForAmbient() {
+      this.closeOptionDialog();
+      this.closeTextDialog({ restoreEditor: false });
+      for (const slot of this.container?.querySelectorAll?.("[data-settings-dialog], [data-trakt-dialog]") || []) {
+        slot.textContent = "";
+      }
     },
     renderOptionDialog() {
       if (!this.optionDialog) {
@@ -267,6 +305,7 @@ export function createSettingsScreenMethods02() {
       const useLanguageRenderer = this.optionDialog.optionRenderer === "subtitle-language";
       const useSingleChoiceRenderer = this.optionDialog.optionRenderer === "single-choice";
       const useMultiRenderer = this.optionDialog.optionRenderer === "multi";
+      const selectable = useMultiRenderer || useLanguageRenderer || useSingleChoiceRenderer || this.optionDialog.selectedId != null;
       const isP2pConsentDialog = String(this.optionDialog.dialogClassName || "") === "settings-p2p-consent-dialog";
       const messageHtml = this.optionDialog.message
         ? `<div class="settings-text-dialog-message settings-option-dialog-message${isP2pConsentDialog ? " settings-p2p-consent-message" : ""}">${escapeHtml(String(this.optionDialog.message)).replace(/\n/g, "<br>")}</div>`
@@ -285,9 +324,10 @@ export function createSettingsScreenMethods02() {
                       ? this.optionDialog.selectedIds?.has?.(optionId)
                       : optionId === String(this.optionDialog.selectedId);
                     return `
-                  <button class="settings-dialog-option settings-content-focusable focusable${useLanguageRenderer ? " settings-language-option" : ""}${useSingleChoiceRenderer ? " settings-single-choice-option" : ""}${isSelected ? " is-selected" : ""}"
+                  <button class="settings-dialog-option settings-content-focusable focusable${useLanguageRenderer ? " settings-language-option" : ""}${useSingleChoiceRenderer ? " settings-single-choice-option" : ""}${useSingleChoiceRenderer && option.description ? " settings-single-choice-option-described" : ""}${isSelected ? " is-selected" : ""}"
                           data-zone="dialog"
                           data-dialog-index="${index}"
+                          role="${useMultiRenderer ? "checkbox" : selectable ? "radio" : "button"}" ${selectable ? `aria-checked="${isSelected ? "true" : "false"}"` : ""}
                           data-dialog-option-id="${escapeHtml(option.id)}">
                     ${
                       useLanguageRenderer
@@ -305,8 +345,14 @@ export function createSettingsScreenMethods02() {
                         : useMultiRenderer
                           ? `<span class="settings-dialog-option-label">${escapeHtml(translateOptionLabel(option))}</span><span class="settings-language-option-check" aria-hidden="true">${isSelected ? "&#10003;" : ""}</span>`
                           : useSingleChoiceRenderer
-                            ? `<span class="settings-dialog-option-label">${escapeHtml(translateOptionLabel(option))}</span>${isSelected ? '<span class="settings-single-choice-option-check" aria-hidden="true">&#10003;</span>' : ""}`
-                            : `<span class="settings-dialog-option-label">${escapeHtml(translateOptionLabel(option))}</span>`
+                            ? `${option.swatch ? renderOptionSwatch(option.swatch) : ""}${
+                                option.description
+                                  ? `<span class="settings-single-choice-option-copy"><span class="settings-dialog-option-label">${escapeHtml(translateOptionLabel(option))}</span><span class="settings-single-choice-option-description">${escapeHtml(String(option.description))}</span></span>`
+                                  : `<span class="settings-dialog-option-label">${escapeHtml(translateOptionLabel(option))}</span>`
+                              }${isSelected ? '<span class="settings-single-choice-option-check" aria-hidden="true">&#10003;</span>' : ""}`
+                            : `<span class="settings-dialog-option-label">${escapeHtml(translateOptionLabel(option))}</span>${
+                                option.swatch ? renderOptionSwatch(option.swatch) : ""
+                              }${option.value ? `<span class="settings-dialog-option-value">${escapeHtml(String(option.value))}</span>` : ""}`
                     }
                   </button>
                 `;

@@ -33,15 +33,37 @@ export function createAuthQrSignInScreenMethods01() {
       this.email = "";
       this.password = "";
       this.emailError = "";
+      this.qrResult = null;
+      this.qrStatusText = "";
       this.isServerMenuOpen = false;
       this.focusAfterRender = null;
       this.showSignOutConfirmation = false;
+      this.lastActivation = null;
+      if (!this.container.__nuvioActivationDedupe) {
+        this.container.__nuvioActivationDedupe = true;
+        this.container.addEventListener(
+          "click",
+          (event) => {
+            const target = event.target?.closest?.("[data-action], .focusable, button");
+            if (!target || !this.container?.contains(target) || target.matches("input, textarea")) return;
+            if (this.isActivationDuplicated("click")) {
+              event.stopImmediatePropagation();
+              event.preventDefault();
+            }
+          },
+          true
+        );
+      }
       this.isSignedIn = AuthManager.isAuthenticated;
       this.connectedStats = null;
       this.isConnectedStatsLoading = this.isSignedIn;
       this.serverConfiguration = ServerConfigurationStore.getActive();
-      this.useEmailLogin = supportsEmailPasswordAuth(this.serverConfiguration);
-      this.useQrLogin = supportsTvLogin(this.serverConfiguration) && !this.useEmailLogin;
+      this.supportsEmailAuth = supportsEmailPasswordAuth(this.serverConfiguration);
+      this.supportsQrAuth = supportsTvLogin(this.serverConfiguration);
+      // Preserve Android TV's email default for custom servers; expose QR
+      // explicitly when the server supports both authentication methods.
+      this.useEmailLogin = this.supportsEmailAuth;
+      this.useQrLogin = this.supportsQrAuth && !this.useEmailLogin;
       ScreenUtils.show(this.container);
       this.render();
 
@@ -64,12 +86,22 @@ export function createAuthQrSignInScreenMethods01() {
       }
 
       const configuration = this.serverConfiguration || ServerConfigurationStore.getActive();
+      const loginModeItem =
+        !this.isSignedIn && this.supportsEmailAuth && this.supportsQrAuth
+          ? [
+              {
+                action: this.useEmailLogin ? "login-qr" : "login-email",
+                label: I18n.t(this.useEmailLogin ? "server_options_login_with_qr" : "server_options_login_with_email")
+              }
+            ]
+          : [];
       const menuItems = configuration?.isCustom
         ? [
+            ...loginModeItem,
             { action: "use-official", label: I18n.t("server_options_use_official") },
             { action: "connect-custom", label: I18n.t("server_options_change_custom") }
           ]
-        : [{ action: "connect-custom", label: I18n.t("server_options_connect_custom") }];
+        : [...loginModeItem, { action: "connect-custom", label: I18n.t("server_options_connect_custom") }];
 
       this.container.innerHTML = `
           <div class="qr-layout">
@@ -114,6 +146,10 @@ export function createAuthQrSignInScreenMethods01() {
           </div>
         `;
 
+      if (this.useQrLogin && !this.isSignedIn) {
+        this.setStatus(this.qrStatusText);
+        if (this.qrResult) this.renderQr(this.qrResult);
+      }
       this.bindControls();
       ScreenUtils.indexFocusables(this.container);
       const initialSelector = this.showSignOutConfirmation
@@ -158,7 +194,7 @@ export function createAuthQrSignInScreenMethods01() {
           <div id="qr-manual-text" class="qr-manual-text"></div>
           <div id="qr-code-text" class="qr-code-text"></div>
           <div id="qr-expiry" class="qr-expiry"></div>
-          <div id="qr-status" class="qr-status">${escapeHtml(I18n.t("auth.qr.waitingApproval"))}</div>
+          <div id="qr-status" class="qr-status" role="status" aria-live="polite">${escapeHtml(I18n.t("auth.qr.waitingApproval"))}</div>
         `;
     },
     renderConnectedAccountIdentity() {

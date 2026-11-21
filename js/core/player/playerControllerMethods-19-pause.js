@@ -12,6 +12,10 @@ export function createPlayerControllerMethods19() {
   return {
     pause() {
       if (!this.video) return;
+      if (this.webOsDtsAudioState) {
+        this.webOsDtsAudioState.resumePlayback = false;
+        this.webOsDtsAudioState.controlPaused = true;
+      }
 
       this.stopProgressSaving();
       this.cancelProgressSyncAfterSeek();
@@ -34,12 +38,16 @@ export function createPlayerControllerMethods19() {
         return;
       }
 
-      this.video.pause();
+      if (!this.setWebOsExactSeekPaused(true)) this.video.pause();
       this.isPlaying = false;
       this.syncWebOsPlaybackKeepAwake();
     },
     resume() {
       if (!this.video) return;
+      if (this.webOsDtsAudioState) {
+        this.webOsDtsAudioState.resumePlayback = true;
+        this.webOsDtsAudioState.controlPaused = false;
+      }
 
       this.cancelProgressSyncAfterSeek();
       this.flushCurrentProgress({ allowCloudSync: false });
@@ -80,6 +88,10 @@ export function createPlayerControllerMethods19() {
         return;
       }
 
+      if (this.setWebOsExactSeekPaused(false)) {
+        this.syncWebOsPlaybackKeepAwake();
+        return;
+      }
       const playPromise = this.video.play();
       if (playPromise && typeof playPromise.catch === "function") {
         playPromise.catch((error) => {
@@ -93,6 +105,11 @@ export function createPlayerControllerMethods19() {
       this.syncWebOsPlaybackKeepAwake();
     },
     stop({ forceCloudSync = true, allowCloudSync = true, flushProgress = true } = {}) {
+      const seekTargetSeconds = this.getWebOsExactSeekTargetSeconds?.();
+      this.cancelWebOsExactSeek({ pause: true });
+      this.cancelProxyRedirectObservation?.();
+      this.cancelProxyRedirectObservation = null;
+      this.stopWebOsDtsAudioTranscode({ resetFailures: true });
       this.stopWebOsPlaybackKeepAlive();
       this.stopWebOsServiceKeepAlive();
       if (!this.video) return;
@@ -101,7 +118,9 @@ export function createPlayerControllerMethods19() {
       this.cancelProgressSyncAfterSeek();
       this.playRequestToken = Number(this.playRequestToken || 0) + 1;
       this.setStartupPresentationAudioMuted(false);
-      const flushPromise = flushProgress ? this.flushCurrentProgress({ forceCloudSync, allowCloudSync }) : Promise.resolve(false);
+      const flushPromise = flushProgress
+        ? this.flushCurrentProgress({ forceCloudSync, allowCloudSync, seekTargetSeconds })
+        : Promise.resolve(false);
       if (!this.playbackSessionActive) {
         this.clearWebOsTrackSelections();
         this.syncWebOsPlaybackKeepAwake();
@@ -186,7 +205,8 @@ export function createPlayerControllerMethods19() {
         background: this.currentItemBackground || null,
         episodeTitle: this.currentEpisodeTitle || null,
         cloudSessionToken: isCloud ? this.currentCloudSessionToken : null,
-        streamIdentity: this.currentStreamIdentity || null
+        streamIdentity: this.currentStreamIdentity || null,
+        progressSession: this.watchProgressSession || (this.watchProgressSession = { completedKeys: new Set() })
       };
     },
     buildProgressSnapshotKey(context = this.createProgressContext()) {
@@ -226,17 +246,30 @@ export function createPlayerControllerMethods19() {
       }
       return snapshot;
     },
-    async flushCurrentProgress({ forceCloudSync = false, allowCloudSync = true } = {}) {
+    async flushCurrentProgress({
+      forceCloudSync = false,
+      allowCloudSync = true,
+      seekTargetSeconds = this.getWebOsExactSeekTargetSeconds?.()
+    } = {}) {
+      if (this.currentPlaybackIsLive === true) {
+        return false;
+      }
       const context = this.createProgressContext();
       if (!context.itemId) {
         return false;
       }
 
       const snapshot = this.getRecordedProgressSnapshot(context);
-      const currentPositionMs = Math.floor(this.getCurrentTimeSeconds() * 1000);
+      // Android exposes the requested position during an exact seek. LG's
+      // decode pass can still be on earlier keyframes; never persist that clock.
+      const seekTarget = seekTargetSeconds;
+      const hasSeekTarget = typeof seekTarget === "number" && Number.isFinite(seekTarget);
+      const currentPositionMs = Math.floor((hasSeekTarget ? seekTarget : this.getCurrentTimeSeconds()) * 1000);
       const currentDurationMs = Math.floor(this.getDurationSeconds() * 1000);
       const positionMs =
-        Number.isFinite(currentPositionMs) && currentPositionMs > 0 ? currentPositionMs : Number(snapshot?.positionMs || 0);
+        hasSeekTarget || (Number.isFinite(currentPositionMs) && currentPositionMs > 0)
+          ? currentPositionMs
+          : Number(snapshot?.positionMs || 0);
       const durationMs =
         Number.isFinite(currentDurationMs) && currentDurationMs > 0 ? currentDurationMs : Number(snapshot?.durationMs || 0);
 

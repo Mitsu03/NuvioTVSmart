@@ -1,3 +1,7 @@
+import { ProfileManager } from "../../../core/profile/profileManager.js";
+import { LocalStore } from "../../../core/storage/localStore.js";
+import { EpisodeShuffleStore } from "../../../data/local/episodeShuffleStore.js";
+import { selectShuffleEpisode } from "../../../core/player/episodeShuffleSelection.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
@@ -11,9 +15,44 @@ export function createPlayerScreenMethods21() {
         return null;
       }
 
-      let nextEpisode = null;
+      const shuffleSettings = EpisodeShuffleStore.get(this.params?.itemId || this.params?.contentId, itemType);
+      const shuffleCacheKey = JSON.stringify([
+        ProfileManager.getActiveProfileId(),
+        this.params?.itemId || this.params?.contentId,
+        this.params?.videoId,
+        this.params?.season,
+        this.params?.episode,
+        this.params?.nextEpisodeVideoId,
+        shuffleSettings.enabled,
+        shuffleSettings.includeWatched,
+        LocalStore.revision("watchedItems"),
+        LocalStore.revision("watchProgressItems")
+      ]);
+      if (this.shuffleNextCache?.key !== shuffleCacheKey || this.shuffleNextCache?.episodes !== this.episodes) {
+        const shuffleCurrent =
+          this.resolveCurrentEpisodeEntry() ||
+          (this.params?.season != null && Number(this.params?.season) >= 0 && Number(this.params?.episode) > 0
+            ? { season: this.params.season, episode: this.params.episode }
+            : null);
+        const selected = shuffleSettings.enabled
+          ? selectShuffleEpisode({
+              contentId: this.params?.itemId || this.params?.contentId,
+              contentType: itemType,
+              videos: this.episodes || [],
+              surface: "playback",
+              watched: this.shuffleRemoteWatched || new Set(),
+              current: shuffleCurrent,
+              preferredVideoId: this.params?.nextEpisodeVideoId || null,
+              reference: this.params || {}
+            })
+          : null;
+        this.shuffleNextCache = { key: shuffleCacheKey, episodes: this.episodes, selected };
+      }
+      const shuffled = this.shuffleNextCache.selected;
+      if (shuffleSettings.enabled && !shuffled) return null;
+      let nextEpisode = shuffled;
       const explicitVideoId = String(this.params?.nextEpisodeVideoId || "").trim();
-      if (explicitVideoId && this.episodes.length) {
+      if (!nextEpisode && explicitVideoId && this.episodes.length) {
         nextEpisode = this.episodes.find((episode) => String(episode?.id || "") === explicitVideoId) || null;
       }
 
@@ -228,6 +267,7 @@ export function createPlayerScreenMethods21() {
         deferRemoveMs: ENGINEFS_NAVIGATION_CLEANUP_GRACE_MS
       });
       const streamParams = this.buildReturnStreamRouteParamsFromPlayer();
+      this.stopTrackingBeforeTeardown();
       try {
         PlayerController.stop();
       } catch (_) {

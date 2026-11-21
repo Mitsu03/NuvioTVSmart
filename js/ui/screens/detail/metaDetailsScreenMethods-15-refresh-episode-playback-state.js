@@ -1,3 +1,5 @@
+import { trackingErrorMessage } from "../../components/trackingErrorMessage.js";
+import { ProfileManager } from "../../../core/profile/profileManager.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./metaDetailsScreenContext.js";
 
@@ -50,6 +52,9 @@ export function createMetaDetailsScreenMethods15() {
       this.nextEpisodeToWatch = this.computeNextEpisodeToWatch(this.resumeProgress || progress);
     },
     async setEpisodeWatchedState(episode, watched) {
+      const profileId = ProfileManager.getActiveProfileId();
+      const token = this.detailLoadToken;
+      const current = () => ProfileManager.getActiveProfileId() === profileId && this.detailLoadToken === token;
       if (!episode?.id) {
         return false;
       }
@@ -59,16 +64,21 @@ export function createMetaDetailsScreenMethods15() {
         traktId: resolveMetaTraktId(this.meta, this.params)
       };
       if (watched) {
-        await watchedItemsRepository.mark({
-          contentId: this.params?.itemId,
-          ...providerIds,
-          contentType: "series",
-          title: this.meta?.name || this.params?.fallbackTitle || episode.title || "Untitled",
-          season: episode.season,
-          episode: episode.episode,
-          videoId: episode.id,
-          watchedAt: Date.now()
-        });
+        if (
+          (await watchedItemsRepository.mark({
+            contentId: this.params?.itemId,
+            ...providerIds,
+            contentType: "series",
+            title: this.meta?.name || this.params?.fallbackTitle || episode.title || "Untitled",
+            season: episode.season,
+            episode: episode.episode,
+            videoId: episode.id,
+            released: episode.released,
+            watchedAt: Date.now()
+          })) === false ||
+          !current()
+        )
+          return false;
         await watchProgressRepository.saveProgress({
           contentId: this.params?.itemId,
           ...providerIds,
@@ -81,15 +91,20 @@ export function createMetaDetailsScreenMethods15() {
           updatedAt: Date.now()
         });
       } else {
-        await watchedItemsRepository.unmark(this.params?.itemId, {
-          ...providerIds,
-          contentType: "series",
-          season: episode.season,
-          episode: episode.episode,
-          videoId: episode.id
-        });
+        if (
+          (await watchedItemsRepository.unmark(this.params?.itemId, {
+            ...providerIds,
+            contentType: "series",
+            season: episode.season,
+            episode: episode.episode,
+            videoId: episode.id
+          })) === false ||
+          !current()
+        )
+          return false;
         await watchProgressRepository.removeProgress(this.params?.itemId, episode.id);
       }
+      if (!current()) return false;
       if (isSeriesDetailMeta(this.meta, this.episodes)) {
         await watchedSeriesReconciliationService.reconcile(this.params?.itemId, this.params?.itemType || this.meta?.type || "series", {
           meta: this.meta,
@@ -101,7 +116,9 @@ export function createMetaDetailsScreenMethods15() {
             : null
         });
       }
+      if (!current()) return false;
       await this.refreshEpisodePlaybackState();
+      if (!current()) return false;
       this.episodeHoldMenu = null;
       this.syncEpisodePlaybackDom([episode]);
       return true;
@@ -145,6 +162,10 @@ export function createMetaDetailsScreenMethods15() {
       const option = options[Math.max(0, Math.min(options.length - 1, Number(this.seasonHoldMenu?.optionIndex || 0)))];
       if (season == null || !option) {
         return false;
+      }
+      if (option.action === "markPreviousSeasonsWatched") {
+        this.closeSeasonHoldMenu({ restoreFocus: false });
+        return this.markPreviousSeasonsWatched(season);
       }
       if (option.action === "markSeasonWatched" || option.action === "markSeasonUnwatched") {
         this.closeSeasonHoldMenu({ restoreFocus: false });
@@ -201,7 +222,7 @@ export function createMetaDetailsScreenMethods15() {
           this.libraryListMenu.destructiveRemovalRequired = error?.code === "SIMKL_DESTRUCTIVE_REMOVAL_REQUIRED";
           this.libraryListMenu.error = this.libraryListMenu.destructiveRemovalRequired
             ? SIMKL_DESTRUCTIVE_REMOVAL_MESSAGE
-            : t("detail_lists_save_failed", {}, "Could not save list changes.");
+            : trackingErrorMessage(error, null) || t("detail_lists_save_failed", {}, "Could not save list changes.");
           this.mountLibraryListDialog();
         }
         return true;
@@ -250,7 +271,7 @@ export function createMetaDetailsScreenMethods15() {
                      data-trailer-index="${index}"
                      data-trailer-yt-id="${escapeHtml(ytId)}">
               <div class="detail-morelike-poster-wrap">
-                <img class="detail-morelike-poster-image" src="https://img.youtube.com/vi/${escapeHtml(ytId)}/hqdefault.jpg" alt="${escapeHtml(title)}" loading="lazy" decoding="async" />
+                <img class="detail-morelike-poster-image" src="https://img.youtube.com/vi/${escapeHtml(ytId)}/hqdefault.jpg" alt="" loading="lazy" decoding="async" />
                 <span class="detail-trailer-play-badge"><img src="assets/icons/trailer_play_button.svg" alt="" aria-hidden="true" /></span>
               </div>
               <div class="detail-morelike-name">${escapeHtml(title)}</div>

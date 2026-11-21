@@ -1,5 +1,13 @@
 import { Router } from "./routerState.js";
+import { focusWithoutScroll } from "./focusWithoutScroll.js";
 import { Platform } from "../../platform/index.js";
+
+// Hold detection must use when the key was pressed/released, not when a busy main thread got to the
+// event: a late keyup would otherwise turn a short OK press into a long press (Android uses key events too).
+function keyEventTime(event) {
+  const timeStamp = Number(event?.timeStamp);
+  return Number.isFinite(timeStamp) && timeStamp > 0 ? timeStamp : 0;
+}
 
 function buildNormalizedEvent(event) {
   const normalizedKey = Platform.normalizeKey(event);
@@ -118,7 +126,10 @@ export const FocusEngine = {
     const normalizedEvent = buildNormalizedEvent(event);
     const keyIdentity = this.getKeyIdentity(normalizedEvent);
     if (keyIdentity && (!normalizedEvent.repeat || !this.activeKeyDownStartedAt.has(keyIdentity))) {
-      this.activeKeyDownStartedAt.set(keyIdentity, Date.now());
+      this.activeKeyDownStartedAt.set(keyIdentity, {
+        at: Date.now(),
+        timeStamp: keyEventTime(event)
+      });
     }
 
     if (
@@ -186,8 +197,16 @@ export const FocusEngine = {
     }
 
     if (keyIdentity) {
-      const startedAt = Number(this.activeKeyDownStartedAt.get(keyIdentity) || 0);
-      normalizedEvent.keyDownDurationMs = startedAt > 0 ? Math.max(0, Date.now() - startedAt) : 0;
+      const started = this.activeKeyDownStartedAt.get(keyIdentity);
+      const releasedAt = keyEventTime(event);
+      normalizedEvent.keyDownDurationMs = started
+        ? Math.max(
+            0,
+            started.timeStamp && releasedAt
+              ? releasedAt - started.timeStamp
+              : Date.now() - started.at
+          )
+        : 0;
       this.activeKeyDownStartedAt.delete(keyIdentity);
     }
 
@@ -259,13 +278,7 @@ export const FocusEngine = {
       }
     });
     target.classList.add("focused");
-    try {
-      target.focus({ preventScroll: true });
-    } catch (_) {
-      try {
-        target.focus();
-      } catch (_) {}
-    }
+    focusWithoutScroll(target);
     currentScreen?.onPointerFocus?.(target, event);
     this.lastPointerFocusTarget = target;
     return true;
@@ -299,6 +312,20 @@ export const FocusEngine = {
     const currentScreen = Router.getCurrentScreen();
     currentScreen?.onPointerMove?.(event);
     const target = this.getPointerFocusable(event);
+    const activeElement = document.activeElement;
+    // Hover must not end an editing session while the Magic Remote travels
+    // toward the system keyboard. Explicit clicks and D-pad navigation still
+    // move focus through their existing handlers.
+    if (
+      activeElement !== target &&
+      activeElement?.matches?.(
+        "input:not([type]), input[type='text'], input[type='search'], input[type='email'], input[type='password'], input[type='url'], input[type='tel'], input[type='number'], textarea"
+      ) &&
+      !activeElement.disabled &&
+      !activeElement.readOnly
+    ) {
+      return;
+    }
     if (!target || target === this.lastPointerFocusTarget) {
       return;
     }

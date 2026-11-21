@@ -1,8 +1,10 @@
+import { withRequestTimeout } from "../../core/network/requestTimeout.js";
 import { MDBLIST_API_BASE_URL } from "../../config.js";
 import { MdbListSettingsStore } from "../local/mdbListSettingsStore.js";
 import { TmdbService } from "../../core/tmdb/tmdbService.js";
-import { parseMdbListRottenTomatoesPayload } from "../../core/util/mdbListRatingStatus.js";
+import { parseMdbListMediaRatings } from "../../core/util/mdbListRatingStatus.js";
 
+const CACHE_MAX_ITEMS = 200;
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const API_BASE_URL = String(MDBLIST_API_BASE_URL || "https://api.mdblist.com/").replace(/\/+$/, "");
 
@@ -19,6 +21,10 @@ const PROVIDERS = {
 
 const cache = new Map();
 const inFlight = new Map();
+
+function fetchMdbList(url, options = {}) {
+  return withRequestTimeout((signal) => fetch(url, { ...options, signal }), 6000);
+}
 
 function javaStringHash(value) {
   let hash = 0;
@@ -83,112 +89,42 @@ function cacheGet(cacheKey) {
 }
 
 function cacheSet(cacheKey, result) {
+  if (!result) return;
+  if (!cache.has(cacheKey) && cache.size >= CACHE_MAX_ITEMS) {
+    cache.delete(cache.keys().next().value);
+  }
   cache.set(cacheKey, {
     result,
     expiresAtMs: Date.now() + CACHE_TTL_MS
   });
 }
 
-async function runWithConcurrency(items, limit, worker) {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-async function fetchProviderRating({ mediaType, provider, apiKey, requestBody }) {
+async function fetchRatings({ provider, mediaId, mediaType, apiKey }) {
   try {
-    const response = await fetch(
-      `${API_BASE_URL}/rating/${encodeURIComponent(mediaType)}/${encodeURIComponent(provider.apiValue)}?apikey=${encodeURIComponent(apiKey)}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(requestBody)
-      }
-    );
-    if (!response.ok) {
-      console.warn(`MDBList ${provider.apiValue} request failed (${response.status})`);
-      return [provider.key, null];
-    }
-    const payload = await response.json();
-    const rating = payload?.ratings?.[0]?.rating;
-    const numeric = Number(rating);
-    return [provider.key, Number.isFinite(numeric) ? numeric : null];
-  } catch (error) {
-    console.warn(`MDBList ${provider.apiValue} request failed`, error);
-    return [provider.key, null];
-  }
-}
-
-async function fetchRottenTomatoesRatings({ imdbId, mediaType, apiKey }) {
-  try {
-    const response = await fetch(
-      `${API_BASE_URL}/imdb/${encodeURIComponent(mediaType)}/${encodeURIComponent(imdbId)}?apikey=${encodeURIComponent(apiKey)}&append_to_response=keyword`
-    );
-    if (!response.ok) {
-      console.warn(`MDBList Rotten Tomatoes metadata request failed (${response.status})`);
-      return null;
-    }
-    return parseMdbListRottenTomatoesPayload(await response.json());
-  } catch (error) {
-    console.warn("MDBList Rotten Tomatoes metadata request failed", error);
+    const payload = await withRequestTimeout(async (signal) => {
+      const response = await fetch(
+        `${API_BASE_URL}/${provider}/${encodeURIComponent(mediaType)}/${encodeURIComponent(mediaId)}?apikey=${encodeURIComponent(apiKey)}&append_to_response=keyword`,
+        { signal }
+      );
+      return response.ok ? response.json() : null;
+    }, 6000);
+    if (!payload) return null;
+    const ratings = parseMdbListMediaRatings(payload);
+    const hasRatings = Object.keys(PROVIDERS).some((key) => ratings[PROVIDERS[key].key] != null);
+    return hasRatings ? { ratings, hasImdbRating: ratings.imdb != null } : null;
+  } catch (_) {
     return null;
   }
 }
 
-async function fetchRatings({ imdbId, mediaType, apiKey, providers }) {
-  const requestBody = {
-    ids: [imdbId],
-    provider: "imdb"
-  };
-  const rottenTomatoesPromise = providers.some(
-    (provider) => provider.key === "tomatoes" || provider.key === "audience"
-  )
-    ? fetchRottenTomatoesRatings({ imdbId, mediaType, apiKey })
-    : Promise.resolve(null);
-  const entries = await runWithConcurrency(providers, 4, async (provider) => {
-    if (provider.key === "tomatoes" || provider.key === "audience") {
-      const rottenTomatoesRatings = await rottenTomatoesPromise;
-      const metadataRating = rottenTomatoesRatings?.[provider.key];
-      if (metadataRating != null) {
-        return [provider.key, metadataRating];
-      }
-    }
-    return fetchProviderRating({ mediaType, provider, apiKey, requestBody });
-  });
-  const rottenTomatoesRatings = await rottenTomatoesPromise;
-  const ratings = Object.fromEntries(entries);
-  const normalizedRatings = {
-    trakt: ratings.trakt ?? null,
-    imdb: ratings.imdb ?? null,
-    tmdb: ratings.tmdb ?? null,
-    letterboxd: ratings.letterboxd ?? null,
-    tomatoes: ratings.tomatoes ?? null,
-    audience: ratings.audience ?? null,
-    metacritic: ratings.metacritic ?? null
-  };
-  const hasAnyRating = Object.values(normalizedRatings).some((value) => value != null);
-  if (!hasAnyRating) {
-    return null;
-  }
-  const ratingsWithStatus = {
-    ...normalizedRatings,
-    tomatoesCertified:
-      rottenTomatoesRatings?.tomatoes != null && rottenTomatoesRatings.tomatoesCertified === true,
-    audienceCertified:
-      rottenTomatoesRatings?.audience != null && rottenTomatoesRatings.audienceCertified === true
-  };
-  return {
-    ratings: ratingsWithStatus,
-    hasImdbRating: normalizedRatings.imdb != null
-  };
+async function resolveMediaRef(meta, fallbackItemId, fallbackItemType, mediaType) {
+  const imdbId =
+    extractImdbId(meta?.imdbId || meta?.imdb_id || meta?.id) || extractImdbId(fallbackItemId);
+  if (imdbId) return { provider: "imdb", mediaId: imdbId };
+  const tmdbId = extractTmdbId(meta?.id) || extractTmdbId(fallbackItemId);
+  if (tmdbId) return { provider: "tmdb", mediaId: tmdbId };
+  const resolved = await resolveImdbId(meta, fallbackItemId, fallbackItemType, mediaType);
+  return resolved ? { provider: "imdb", mediaId: resolved } : null;
 }
 
 async function resolveImdbId(
@@ -268,7 +204,9 @@ export const mdbListRepository = {
       return true;
     }
     try {
-      const response = await fetch(`${API_BASE_URL}/user?apikey=${encodeURIComponent(trimmed)}`);
+      const response = await fetchMdbList(
+        `${API_BASE_URL}/user?apikey=${encodeURIComponent(trimmed)}`
+      );
       return response.ok;
     } catch (_error) {
       return false;
@@ -286,24 +224,11 @@ export const mdbListRepository = {
     }
 
     const mediaType = normalizeMediaType(itemType);
-    const imdbId = await resolveImdbId(
-      { id: itemId, type: mediaType === "show" ? "series" : "movie", name: itemId },
-      itemId,
-      itemType,
-      mediaType
-    );
-    if (!imdbId) {
-      return null;
-    }
-
-    const cacheKey = `${mediaType}:${imdbId}:imdb:${javaStringHash(apiKey)}`;
+    const ref = await resolveMediaRef({ id: itemId }, itemId, itemType, mediaType);
+    if (!ref) return null;
+    const cacheKey = `${ref.provider}:${mediaType}:${ref.mediaId}:${javaStringHash(apiKey)}`;
     const result = await getCachedOrFetch(cacheKey, () =>
-      fetchRatings({
-        imdbId,
-        mediaType,
-        apiKey,
-        providers: [PROVIDERS.IMDB]
-      })
+      fetchRatings({ ...ref, mediaType, apiKey })
     );
     return result?.ratings?.imdb ?? null;
   },
@@ -323,23 +248,22 @@ export const mdbListRepository = {
     }
 
     const mediaType = normalizeMediaType(meta?.apiType || fallbackItemType);
-    const imdbId = await resolveImdbId(meta, fallbackItemId, fallbackItemType, mediaType);
-    if (!imdbId) {
-      return null;
-    }
-
-    const providerHash = providers
-      .map((provider) => provider.apiValue)
-      .sort()
-      .join(",");
-    const cacheKey = `${mediaType}:${imdbId}:${providerHash}:${javaStringHash(apiKey)}`;
-    return getCachedOrFetch(cacheKey, () =>
-      fetchRatings({
-        imdbId,
-        mediaType,
-        apiKey,
-        providers
-      })
+    const ref = await resolveMediaRef(meta, fallbackItemId, fallbackItemType, mediaType);
+    if (!ref) return null;
+    const cacheKey = `${ref.provider}:${mediaType}:${ref.mediaId}:${javaStringHash(apiKey)}`;
+    const result = await getCachedOrFetch(cacheKey, () =>
+      fetchRatings({ ...ref, mediaType, apiKey })
     );
+    if (!result) return null;
+    const selected = new Set(providers.map((provider) => provider.key));
+    const ratings = Object.fromEntries(
+      Object.values(PROVIDERS).map((provider) => [
+        provider.key,
+        selected.has(provider.key) ? result.ratings[provider.key] : null
+      ])
+    );
+    ratings.tomatoesCertified = ratings.tomatoes != null && result.ratings.tomatoesCertified;
+    ratings.audienceCertified = ratings.audience != null && result.ratings.audienceCertified;
+    return { ratings, hasImdbRating: ratings.imdb != null };
   }
 };

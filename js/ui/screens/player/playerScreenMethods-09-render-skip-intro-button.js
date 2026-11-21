@@ -1,3 +1,5 @@
+import { canResolveMediaServerStream } from "../../../data/mediaserver/mediaServerRepository.js";
+import { syncHtmlSubtitleClearance } from "./subtitleOverlayClearance.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
@@ -39,6 +41,7 @@ export function createPlayerScreenMethods09() {
       if (!shouldShow) {
         button.innerHTML = "";
         this.skipIntroRenderedKey = renderKey;
+        syncHtmlSubtitleClearance(this);
         return;
       }
       if (this.skipIntroRenderedKey !== renderKey || !button.querySelector(".player-skip-intro-btn")) {
@@ -67,6 +70,7 @@ export function createPlayerScreenMethods09() {
         this.skipIntroRenderedKey = renderKey;
       }
       this.syncSkipIntroButtonProgress();
+      syncHtmlSubtitleClearance(this);
       const focusTarget = this.uiRefs?.skipIntro?.querySelector(".player-skip-intro-btn");
       if (focusTarget) {
         if (!focusTarget.dataset.skipIntroThemeBound) {
@@ -125,10 +129,12 @@ export function createPlayerScreenMethods09() {
         if (this.isExternalFrameMode()) {
           return;
         }
-        if (!PlayerSettingsStore.get().skipIntroEnabled) {
+        // Most titles have no intervals; check that before the settings read so
+        // this 250 ms timer does not parse storage four times a second for nothing.
+        if (!Array.isArray(this.skipIntervals) || !this.skipIntervals.length) {
           return;
         }
-        if (!Array.isArray(this.skipIntervals) || !this.skipIntervals.length) {
+        if (!PlayerSettingsStore.get().skipIntroEnabled) {
           return;
         }
         this.updateActiveSkipInterval(this.getPlaybackCurrentSeconds());
@@ -145,13 +151,27 @@ export function createPlayerScreenMethods09() {
         return false;
       }
       const interval = this.activeSkipInterval;
-      const targetTime = getSkipIntervalTargetSeconds(interval, this.skipIntervals, this.getPlaybackDurationSeconds());
-      if (!Number.isFinite(targetTime)) {
+      const durationSeconds = this.getPlaybackDurationSeconds();
+      const intervalTarget = getSkipIntervalTargetSeconds(interval, this.skipIntervals, durationSeconds);
+      if (!Number.isFinite(intervalTarget)) {
         return false;
+      }
+      // Match Android: never seek past the media duration reported by the player.
+      const requestedTime = durationSeconds > 0 ? Math.min(intervalTarget, durationSeconds) : intervalTarget;
+      let targetTime = requestedTime;
+      if (this.isPartyControlLocked?.()) {
+        const partyTargetMs = this.ownSeekTarget(Math.round(requestedTime * 1000));
+        if (partyTargetMs == null) {
+          return false;
+        }
+        targetTime = partyTargetMs / 1000;
       }
       this.skipIntroSuppressedKey = getSkipIntervalKey(interval);
       this.skipIntroSuppressedUntil = Date.now() + SKIP_INTERVAL_SEEK_SUPPRESSION_MS;
+      // Match Android: transfer focus before the focused skip button disappears.
+      if (this.controlsVisible) this.focusFirstControl();
       this.seekPlaybackSeconds(targetTime, { preserveSkipIntroSuppression: true });
+      this.publishPartyPlayback?.({ positionMs: Math.round(targetTime * 1000) });
       this.skipIntervalDismissed = true;
       this.activeSkipInterval = null;
       this.skipIntroAutoHidden = false;
@@ -233,7 +253,8 @@ export function createPlayerScreenMethods09() {
             subtitles: Array.isArray(stream.subtitles) ? stream.subtitles : [],
             raw: stream
           };
-          return DirectDebridResolver.shouldListStream(entry) ||
+          return canResolveMediaServerStream(entry) ||
+            DirectDebridResolver.shouldListStream(entry) ||
             WebOsEngineFsResolver.canResolveStream(entry) ||
             TizenStreamingServerResolver.canResolveStream(entry)
             ? entry
@@ -246,7 +267,9 @@ export function createPlayerScreenMethods09() {
         return null;
       }
       const current = this.streamCandidates[this.currentStreamIndex] || null;
-      if (current?.url) {
+      // Debrid/P2P candidates remain selected while their playback URL is resolving.
+      // A ready URL on another candidate does not make it the current source.
+      if (current) {
         return current;
       }
       return this.streamCandidates.find((entry) => Boolean(entry?.url)) || null;

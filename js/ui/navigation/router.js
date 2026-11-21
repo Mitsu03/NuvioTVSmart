@@ -25,8 +25,12 @@ import { CastDetailScreen } from "../screens/cast/castDetailScreen.js";
 import { CatalogSeeAllScreen } from "../screens/catalog/catalogSeeAllScreen.js";
 import { TmdbEntityBrowseScreen } from "../screens/tmdb/tmdbEntityBrowseScreen.js";
 import { FolderDetailScreen } from "../screens/collection/folderDetailScreen.js";
+import { CollectionsScreen } from "../screens/collection/collectionsScreen.js";
+import { CollectionEditorScreen } from "../screens/collection/collectionEditorScreen.js";
+import { PartyScreen } from "../screens/party/partyScreen.js";
 import { Platform } from "../../platform/index.js";
 import { TizenCapabilities } from "../../platform/tizen/tizenCapabilities.js";
+import { markBootTiming } from "../../core/diagnostics/bootTiming.js";
 import { RouteStateStore } from "./routeStateStore.js";
 import { Router } from "./routerState.js";
 import { LocalStore } from "../../core/storage/localStore.js";
@@ -34,6 +38,7 @@ import { LocalStore } from "../../core/storage/localStore.js";
 import { createRouterMethods01 } from "./routerMethods-01-get-route-state-key.js";
 import { createRouterMethods02 } from "./routerMethods-02-complete-route-return-back-guard.js";
 import { createRouterMethods03 } from "./routerMethods-03-back.js";
+import { openPendingLaunchDeepLink } from "../../core/deeplink/launchDeepLink.js";
 
 export {
   Router,
@@ -64,6 +69,7 @@ export {
   CatalogSeeAllScreen,
   TmdbEntityBrowseScreen,
   FolderDetailScreen,
+  PartyScreen,
   Platform,
   TizenCapabilities,
   RouteStateStore,
@@ -71,7 +77,9 @@ export {
   ROUTER_PERF_DEBUG,
   routerPerfNow,
   logRouterPerf,
+  markBootTiming,
   NON_BACKSTACK_ROUTES,
+  openPendingLaunchDeepLink,
   WEBOS_RESUME_ROUTE_KEY,
   WEBOS_RESUME_ROUTE_TTL_MS,
   TIZEN_ROUTE_RETURN_BACK_GUARD_MS,
@@ -117,9 +125,12 @@ const WEBOS_NON_RESTORABLE_ROUTES = new Set([
   "plugin",
   "plugins",
   "catalogOrder",
+  "collections",
+  "collectionEditor",
   "detail",
   "player",
-  "stream"
+  "stream",
+  "watchParty"
 ]);
 
 function getStackEntryRoute(entry) {
@@ -188,7 +199,10 @@ Object.assign(Router, {
     castDetail: CastDetailScreen,
     catalogSeeAll: CatalogSeeAllScreen,
     tmdbEntityBrowse: TmdbEntityBrowseScreen,
-    folderDetail: FolderDetailScreen
+    folderDetail: FolderDetailScreen,
+    collections: CollectionsScreen,
+    collectionEditor: CollectionEditorScreen,
+    watchParty: PartyScreen
   },
   ...createRouterMethods01(),
   ...createRouterMethods02(),

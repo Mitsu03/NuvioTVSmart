@@ -1,3 +1,4 @@
+import { TraktSettingsStore } from "./traktSettingsStore.js";
 import { LocalStore } from "../../core/storage/localStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 import { normalizeTraktTokenLifetimeSeconds } from "./traktTokenLifetime.js";
@@ -98,7 +99,7 @@ export const TraktAuthStore = {
 
   saveToken(data = {}, profileId = activeProfileId()) {
     const current = readProfileState(profileId);
-    return writeProfileState(profileId, {
+    const saved = writeProfileState(profileId, {
       ...current,
       accessToken: data.access_token || data.accessToken || null,
       refreshToken: data.refresh_token || data.refreshToken || null,
@@ -113,6 +114,9 @@ export const TraktAuthStore = {
       expiresAt: null,
       pollInterval: null
     });
+    if (saved.accessToken && saved.refreshToken)
+      TraktSettingsStore.providerConnected("trakt", profileId);
+    return saved;
   },
 
   saveUser({ username = null, userSlug = null } = {}, profileId = activeProfileId()) {
@@ -137,6 +141,7 @@ export const TraktAuthStore = {
   },
 
   clearAuth(profileId = activeProfileId()) {
+    TraktSettingsStore.providerDisconnected("trakt", profileId);
     return writeProfileState(profileId, {});
   }
 };

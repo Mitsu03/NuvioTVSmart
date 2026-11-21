@@ -1,4 +1,10 @@
 import * as internals from "./homeScreenContext.js";
+import {
+  CW_RELEASE_REFRESH_MARGIN_MS,
+  CW_RELEASE_REFRESH_MAX_WAIT_MS,
+  nextContinueWatchingReleaseMs
+} from "./continueWatchingStability.js";
+import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 import { startHomeContinueWatchingLoad } from "./homeContinueWatchingLoad.js";
 
 function catalogItemIdentity(item = {}) {
@@ -88,6 +94,9 @@ export function createHomeScreenMethods04() {
     watchProgressRepository,
     watchedItemsRepository,
     LayoutPreferences,
+    HomeCatalogStore,
+    getSidebarProfileState,
+    buildSidebarProfileSignature,
     getContinueWatchingNextUpSeedOptions,
     buildCatalogOrderKey,
     catalogShouldShowOnHome,
@@ -129,7 +138,10 @@ export function createHomeScreenMethods04() {
         this.initialHomeLoadTimeout = null;
       }
     },
-    releaseInitialHomeLoading() {
+    releaseInitialHomeLoading({ force = false } = {}) {
+      if (!force && !this.continueWatchingInitialResolved) {
+        return;
+      }
       this.isInitialHomeLoading = false;
       this.cancelInitialHomeLoadTimeout();
     },
@@ -143,7 +155,7 @@ export function createHomeScreenMethods04() {
         // Match Android's stable Home gate: a slow or incomplete startup must
         // reveal the available surface instead of keeping a full-screen loader
         // indefinitely. The catalog requests continue in the background.
-        this.releaseInitialHomeLoading();
+        this.releaseInitialHomeLoading({ force: true });
         this.requestBackgroundRender();
       }, HOME_STABLE_GATE_TIMEOUT_MS);
     },
@@ -235,6 +247,38 @@ export function createHomeScreenMethods04() {
         console.warn("Home Continue Watching sync refresh failed", error);
       });
       return true;
+    },
+    /**
+     * Android observeContinueWatchingReleases: runs Continue Watching again when an
+     * upcoming episode airs (or a series without a next-up is due a recheck) while the
+     * app stays open. Waits in steps, since timers stall while the TV sleeps.
+     */
+    scheduleContinueWatchingReleaseRefresh() {
+      clearTimeout(this.continueWatchingReleaseTimer);
+      this.continueWatchingReleaseTimer = null;
+      const nowMs = Date.now();
+      const nextMs = nextContinueWatchingReleaseMs(this.continueWatchingDisplay, this.continueWatchingNoNextUpRecheckTimes, nowMs);
+      if (nextMs == null) {
+        return;
+      }
+      const waitMs = nextMs - nowMs + CW_RELEASE_REFRESH_MARGIN_MS;
+      this.continueWatchingReleaseTimer = setTimeout(
+        () => {
+          this.continueWatchingReleaseTimer = null;
+          if (waitMs > CW_RELEASE_REFRESH_MAX_WAIT_MS) {
+            this.scheduleContinueWatchingReleaseRefresh();
+            return;
+          }
+          if (Router.getCurrent() !== "home") {
+            // Home loads Continue Watching again when it is shown.
+            return;
+          }
+          void this.refreshHomeContinueWatchingAfterSync().catch((error) => {
+            console.warn("Continue Watching release refresh failed", error);
+          });
+        },
+        Math.min(waitMs, CW_RELEASE_REFRESH_MAX_WAIT_MS)
+      );
     },
     refreshHomeContinueWatchingAfterSync() {
       if (Router.getCurrent() !== "home" || this.homeBackgroundRefreshPending || this.homeBackgroundRefreshPromise) {
@@ -446,6 +490,49 @@ export function createHomeScreenMethods04() {
       this.homeCatalogRefreshPromise = refreshPromise;
       return refreshPromise;
     },
+    buildHomeRouteInputSignature(addons = addonRepository.getCachedInstalledAddons()) {
+      const settingsSignature = this.buildSyncSensitiveHomeSignature();
+      if (!settingsSignature) {
+        return "";
+      }
+      return JSON.stringify([
+        settingsSignature,
+        getTvRuntimePerformanceProfile().isPerformanceConstrained,
+        addonRepository.getInstalledAddonUrls(),
+        addonRepository.getAddonEnabledStates(),
+        addons,
+        HomeCatalogStore.get(),
+        CollectionsStore.get()
+      ]);
+    },
+    async refreshHomeAfterRouteReturn({ preserveReturnState = true, reason = "route-return" } = {}) {
+      // Android retains Home's rows on resume. Rebuild only for changed inputs
+      // or an interrupted catalog load; otherwise reconcile watch state and
+      // merge catalog page one only after the shared freshness window expires.
+      const signature = this.buildHomeRouteInputSignature();
+      if (!signature || signature !== this.loadedHomeRouteInputSignature) {
+        return this.requestHomeBackgroundRefresh({ preserveReturnState, reason });
+      }
+      this.retryPendingCatalogRows();
+      const token = this.homeLoadToken;
+      return Promise.all([
+        this.refreshHomeContinueWatchingAfterSync(),
+        this.refreshHomeCatalogsIfStale({ reason }),
+        getSidebarProfileState()
+          .catch(() => null)
+          .then((profile) => {
+            if (
+              token === this.homeLoadToken &&
+              Router.getCurrent() === "home" &&
+              profile &&
+              buildSidebarProfileSignature(profile) !== buildSidebarProfileSignature(this.sidebarProfile)
+            ) {
+              this.sidebarProfile = profile;
+              this.requestBackgroundRender();
+            }
+          })
+      ]);
+    },
     ensureStartupSyncSubscription() {
       if (this.unsubscribeStartupSyncPullCompleted) {
         return;
@@ -600,6 +687,10 @@ export function createHomeScreenMethods04() {
         clearTimeout(this.heroBackdropPreloadTimer);
         this.heroBackdropPreloadTimer = null;
       }
+      if (this.heroEnrichDwellTimer) {
+        clearTimeout(this.heroEnrichDwellTimer);
+        this.heroEnrichDwellTimer = null;
+      }
       if (this.deferredContinueWatchingFocusTimer) {
         clearTimeout(this.deferredContinueWatchingFocusTimer);
         this.deferredContinueWatchingFocusTimer = null;
@@ -609,18 +700,18 @@ export function createHomeScreenMethods04() {
     },
     startHeroRotation() {
       this.stopHeroRotation();
-      if (this.layoutMode === "modern" || this.isPerformanceConstrained()) {
+      if (this.layoutMode === "modern" || this.isPerformanceConstrained() || this.heroDescriptionScrollHolding) {
         return;
       }
       if (!Array.isArray(this.heroCandidates) || this.heroCandidates.length <= 1) {
         return;
       }
       this.heroRotateTimeout = setTimeout(() => {
-        if (!this.container?.querySelector(".home-hero-card.focusable.focused")) {
+        if (!this.heroDescriptionScrollHolding && !this.container?.querySelector(".home-hero-card.focusable.focused")) {
           this.rotateHero(1);
         }
         this.heroRotateTimer = setInterval(() => {
-          if (!this.container?.querySelector(".home-hero-card.focusable.focused")) {
+          if (!this.heroDescriptionScrollHolding && !this.container?.querySelector(".home-hero-card.focusable.focused")) {
             this.rotateHero(1);
           }
         }, HERO_ROTATE_INTERVAL_MS);

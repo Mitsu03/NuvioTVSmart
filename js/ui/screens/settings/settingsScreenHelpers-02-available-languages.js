@@ -42,8 +42,6 @@ import {
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
 
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
-
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 
 import { ExperienceModeStore } from "../../../data/local/experienceModeStore.js";
@@ -362,6 +360,11 @@ export const SUBTITLE_OUTLINE_COLOR_OPTIONS = [
   { id: "#00E5FF", label: "Cyan" },
   { id: "#FF5C5C", label: "Red" }
 ];
+
+export const SUBTITLE_HDR_BRIGHTNESS_OPTIONS = Array.from({ length: 11 }, (_, index) => {
+  const value = index * 10;
+  return { id: value, label: `${value}%` };
+});
 
 export function normalizeSubtitleStyleHex(value, fallback) {
   const hex = String(value || "")

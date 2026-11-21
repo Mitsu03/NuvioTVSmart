@@ -1,4 +1,12 @@
 import * as internals from "./homeScreenContext.js";
+import {
+  createHomeRowWindow,
+  isHomeRowWindowSupported,
+  supportsHomeGridRowWindow,
+  HOME_LEGACY_ROW_WINDOW_SELECTOR,
+  HOME_ROW_WINDOW_SELECTOR
+} from "./homeRowWindow.js";
+import { chunkHomeGridCards } from "./homeScreenHelpers-14-get-home-grid-column-count.js";
 
 export function createHomeScreenMethods18() {
   const { HOME_PERF_DEBUG, homePerfNow, logHomePerf, groupNodesByOffsetTop } = internals;
@@ -12,6 +20,7 @@ export function createHomeScreenMethods18() {
         return false;
       }
       this.refreshPendingHomeTrailerCleanup();
+      this.homeRowWindow?.ensureReady(target);
       const focusStart = HOME_PERF_DEBUG ? homePerfNow() : 0;
       const scrollAdjustments = this.getExpandedPosterScrollAdjustments(current, target, direction);
       const shouldInstantCollapseExpandedPoster =
@@ -25,8 +34,15 @@ export function createHomeScreenMethods18() {
       target.classList.add("focused");
       this.focusWithoutAutoScroll(target, { suppressDelegatedFocus: true });
       this.setCurrentFocusedNode(target);
+      const deferHomeArtworkUntilSettle =
+        direction === "up" ||
+        direction === "down" ||
+        (this.layoutMode === "modern" &&
+          !this.isPerformanceConstrained() &&
+          !this.isLegacyTvRuntime() &&
+          (direction === "left" || direction === "right"));
       this.scheduleHomeLazyImageHydration(target, {
-        deferUntilVerticalSettle: direction === "up" || direction === "down",
+        deferUntilVerticalSettle: deferHomeArtworkUntilSettle,
         focusedRowOnly: this.isLegacyTvRuntime()
       });
       if (this.isCollectionFolderNode(current)) {
@@ -149,7 +165,10 @@ export function createHomeScreenMethods18() {
         const gridTracks = Array.from(this.container?.querySelectorAll(".home-grid-track") || []);
         gridTracks.forEach((track) => {
           const cards = Array.from(track.querySelectorAll(".home-content-card.focusable"));
-          groupNodesByOffsetTop(cards).forEach((rowNodes) => {
+          // A parked section has no geometry to read; its rows follow from the
+          // column count measured on the sections in layout.
+          const gridRows = this.homeGridColumnCount ? chunkHomeGridCards(cards, this.homeGridColumnCount) : groupNodesByOffsetTop(cards);
+          gridRows.forEach((rowNodes) => {
             if (rowNodes.length) {
               rows.push(rowNodes);
             }
@@ -198,6 +217,42 @@ export function createHomeScreenMethods18() {
       if (!this.lastMainFocus || !this.container?.contains(this.lastMainFocus) || !this.isMainNode(this.lastMainFocus)) {
         this.lastMainFocus = rows[0]?.[0] || null;
       }
+      this.syncHomeRowWindow();
+    },
+    prepareHomeRowsForRestore(state = null) {
+      // Coming back to a kept Home DOM: the window was dropped in cleanup.
+      this.syncHomeRowWindow();
+      const rowKeys = Object.entries(state?.trackStates || {})
+        .filter(([, scrollLeft]) => Number(scrollLeft) > 0)
+        .map(([rowKey]) => rowKey);
+      this.homeRowWindow?.ensureRowKeysReady([...rowKeys, state?.rowKey]);
+    },
+    syncHomeRowWindow() {
+      const modern = this.layoutMode === "modern";
+      const legacy =
+        this.layoutMode === "classic" || (this.layoutMode === "grid" && supportsHomeGridRowWindow() && this.homeGridColumnCount);
+      const root = modern
+        ? this.container?.querySelector(".home-modern-rows-viewport")
+        : legacy
+          ? this.container?.querySelector(".home-main")
+          : null;
+      if (!root || !isHomeRowWindowSupported()) {
+        if (!modern && !legacy && this.homeRowWindow) {
+          // Grid fell back to geometric grouping: no row may stay parked.
+          this.homeRowWindow.unparkAll();
+          this.homeRowWindow.destroy();
+          this.homeRowWindow = null;
+          this.homeRowWindowRoot = null;
+        }
+        return;
+      }
+      const selector = modern ? HOME_ROW_WINDOW_SELECTOR : HOME_LEGACY_ROW_WINDOW_SELECTOR;
+      if (this.homeRowWindowRoot !== root) {
+        this.homeRowWindow?.destroy();
+        this.homeRowWindow = createHomeRowWindow({ root, selector });
+        this.homeRowWindowRoot = root;
+      }
+      this.homeRowWindow.observe(Array.from(root.querySelectorAll(selector)));
     }
   };
 }

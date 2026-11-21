@@ -498,10 +498,21 @@ function historyMutationBody(item, fallbackEntry, includeWatchedAt) {
       ? null
       : Number(item.episode);
   if (episode == null) {
+    // A show-level history write marks every episode, including unknown ones.
+    // Keep show-level removal supported, but only add concrete episodes.
+    if (includeWatchedAt) return { movies: [], shows: [] };
     return {
       movies: [],
       shows: [{ ...media, ...(includeWatchedAt ? { status: "completed" } : {}) }]
     };
+  }
+  if (
+    includeWatchedAt &&
+    (!Number.isInteger(episode) ||
+      episode <= 0 ||
+      (season != null && (!Number.isInteger(season) || season < 0)))
+  ) {
+    return { movies: [], shows: [] };
   }
   const episodeValue = {
     number: episode,
@@ -754,6 +765,7 @@ export const SimklSyncService = {
 
   async refresh({ force = false } = {}) {
     const profileId = activeProfileId();
+    const profileVersion = ProfileManager.getProfileDataVersion(profileId);
     if (!SimklAuthService.isAuthenticated()) {
       setRefreshStatus(profileId, "error");
       return false;
@@ -769,7 +781,11 @@ export const SimklSyncService = {
       setRefreshStatus(profileId, snapshotHasLoadedProgress(current) ? "loaded" : "error");
       return false;
     }
-    if (refreshInFlight?.profileId === profileId) return refreshInFlight.promise;
+    if (
+      refreshInFlight?.profileId === profileId &&
+      refreshInFlight.profileVersion === profileVersion
+    )
+      return refreshInFlight.promise;
     setRefreshStatus(profileId, "loading");
     const promise = (
       needsBootstrap || !current.initialized
@@ -777,7 +793,11 @@ export const SimklSyncService = {
         : incrementalSync(current, profileId)
     )
       .then((snapshot) => {
-        if (activeProfileId() !== profileId) return false;
+        if (
+          activeProfileId() !== profileId ||
+          profileVersion !== ProfileManager.getProfileDataVersion(profileId)
+        )
+          return false;
         saveSnapshot({ ...snapshot, schemaVersion: SNAPSHOT_SCHEMA_VERSION }, profileId);
         setRefreshStatus(profileId, "loaded");
         return true;
@@ -791,7 +811,7 @@ export const SimklSyncService = {
       .finally(() => {
         if (refreshInFlight?.promise === promise) refreshInFlight = null;
       });
-    refreshInFlight = { profileId, promise };
+    refreshInFlight = { profileId, profileVersion, promise };
     return promise;
   },
 

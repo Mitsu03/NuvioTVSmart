@@ -76,8 +76,6 @@ import { StreamBadgeSettingsStore } from "../../../data/local/streamBadgeSetting
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
 
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
-
 import { matchStreamBadges } from "../../../core/streams/streamBadgeRules.js";
 
 import { hasReleaseToken } from "../../../core/streams/releaseToken.js";
@@ -408,7 +406,7 @@ export function formatEpisodePanelDate(value = "") {
     return "";
   }
   try {
-    return parsed.toLocaleDateString(undefined, {
+    return parsed.toLocaleDateString(I18n.getLocale(), {
       month: "long",
       day: "numeric",
       year: "numeric"

@@ -42,8 +42,6 @@ import {
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
 
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
-
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 
 import { ExperienceModeStore } from "../../../data/local/experienceModeStore.js";
@@ -144,7 +142,8 @@ export function createDefaultExpandedState(sectionId) {
       continueWatching: false,
       detailPage: false,
       focusedPoster: false,
-      cardAppearance: false
+      cardAppearance: false,
+      customPosters: false
     };
   }
 
@@ -153,7 +152,6 @@ export function createDefaultExpandedState(sectionId) {
       general: false,
       stream: false,
       audio: false,
-      audioCompatibility: false,
       subtitles: false,
       p2p: false
     };

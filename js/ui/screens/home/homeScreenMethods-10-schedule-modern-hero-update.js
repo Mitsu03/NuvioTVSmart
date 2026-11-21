@@ -1,7 +1,9 @@
 import * as internals from "./homeScreenContext.js";
+import { getHeroEnrichDwellMs, isModernTvProfile } from "../../../platform/tvPerformancePolicy.js";
+import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
 
 export function createHomeScreenMethods10() {
-  const { MODERN_HOME_CONSTANTS, getTvRuntimePerformanceProfile, shouldEnrichModernHero, preloadHeroAssets, buildHeroIdentity } = internals;
+  const { MODERN_HOME_CONSTANTS, shouldEnrichModernHero, preloadHeroAssets, buildHeroIdentity } = internals;
 
   return {
     scheduleModernHeroUpdate(node, { deferUntilVerticalSettle = false, immediate = false } = {}) {
@@ -31,10 +33,9 @@ export function createHomeScreenMethods10() {
       if (isRapidNav || immediate) {
         this.container?.querySelector(".home-modern-hero-card")?.classList.add("is-hero-focus-pending");
       }
-      const canPreloadHeroDuringVerticalScroll =
-        deferUntilVerticalSettle && getTvRuntimePerformanceProfile().isTvRuntime && !this.isPerformanceConstrained();
+      const shouldWaitForCamera = deferUntilVerticalSettle || isModernTvProfile(getTvRuntimePerformanceProfile());
       const waitForVerticalSettle = (callback) => {
-        if (deferUntilVerticalSettle && !canPreloadHeroDuringVerticalScroll && this.isModernVerticalScrollActive()) {
+        if (shouldWaitForCamera && this.isModernHydrationScrollActive()) {
           this.heroBackdropPreloadTimer = setTimeout(
             () => waitForVerticalSettle(callback),
             MODERN_HOME_CONSTANTS.verticalScrollSettlePollMs
@@ -91,7 +92,11 @@ export function createHomeScreenMethods10() {
             return;
           }
           const shouldEnrichHero = shouldEnrichModernHero(latestHero);
-          const focusedHero = shouldEnrichHero ? { ...latestHero, heroMetaEnriching: true } : { ...latestHero, heroMetaEnriching: false };
+          // While the dwell runs the hero is a plain, complete catalog hero:
+          // the enriching flag would keep the previous backdrop on screen.
+          const enrichDwellMs = shouldEnrichHero ? getHeroEnrichDwellMs(getTvRuntimePerformanceProfile()) : 0;
+          const focusedHero =
+            shouldEnrichHero && !enrichDwellMs ? { ...latestHero, heroMetaEnriching: true } : { ...latestHero, heroMetaEnriching: false };
 
           // Android publishes the newly focused preview as soon as focus settles;
           // metadata enrichment remains an independent background update. Waiting
@@ -105,6 +110,16 @@ export function createHomeScreenMethods10() {
           }
           this.applyHeroToDom();
 
+          if (shouldEnrichHero && enrichDwellMs) {
+            void preloadHeroAssets(focusedHero, "modern");
+            this.heroEnrichDwellTimer = setTimeout(() => {
+              this.heroEnrichDwellTimer = null;
+              if (Number(this.heroFocusToken || 0) === focusToken) {
+                void this.enrichCurrentHeroAsync(focusedHero, focusToken, { deferCommit: true });
+              }
+            }, enrichDwellMs);
+            return;
+          }
           if (shouldEnrichHero) {
             void this.enrichCurrentHeroAsync(focusedHero, focusToken, { deferCommit: true });
             return;

@@ -1,3 +1,4 @@
+import { trackingErrorMessage } from "./trackingErrorMessage.js";
 import { I18n } from "../../i18n/index.js";
 import { savedLibraryRepository } from "../../data/repository/savedLibraryRepository.js";
 import { libraryRepository, LibrarySourceMode } from "../../data/repository/libraryRepository.js";
@@ -47,6 +48,9 @@ export function posterItemFromNode(node, fallbackType = "movie") {
 function toLibraryItem(item = {}) {
   return {
     itemId: item.id,
+    imdbId: item.imdbId || item.ids?.imdb || null,
+    tmdbId: item.tmdbId || item.ids?.tmdb || null,
+    traktId: item.traktId || item.ids?.trakt || null,
     itemType: item.type || "movie",
     title: item.title || item.name || item.id || "Untitled",
     poster: item.poster || null,
@@ -154,36 +158,50 @@ export async function activatePosterOption(state, action, _options = {}) {
   if (action === "toggleWatched") {
     if (isSeriesType(item.type)) {
       if (state.isWatched) {
-        await watchedSeriesReconciliationService.unmarkSeriesWatched(item.id, {
-          contentType: item.type || "series"
-        });
+        if (
+          (await watchedSeriesReconciliationService.unmarkSeriesWatched(item.id, {
+            contentType: item.type || "series"
+          })) === false
+        )
+          return false;
       } else {
-        await watchedSeriesReconciliationService.markSeriesWatched(item.id, item.type || "series", {
-          title: item.title || item.name || item.id || "Untitled"
-        });
+        const marked = await watchedSeriesReconciliationService.markSeriesWatched(
+          item.id,
+          item.type || "series",
+          {
+            title: item.title || item.name || item.id || "Untitled"
+          }
+        );
+        if (!marked) return false;
       }
       return { type: "updated", state: { ...state, isWatched: !state.isWatched } };
     }
     if (state.isWatched) {
-      await watchedItemsRepository.unmark(item.id, {
+      if (
+        (await watchedItemsRepository.unmark(item.id, {
+          contentType: item.type || "movie",
+          imdbId: item.imdbId || null,
+          tmdbId: item.tmdbId || null,
+          traktId: item.traktId || null,
+          title: item.title || item.name || item.id || "Untitled"
+        })) === false
+      )
+        return false;
+      await watchProgressRepository.removeProgress(item.id);
+      return { type: "updated", state: { ...state, isWatched: false } };
+    }
+    if (
+      (await watchedItemsRepository.mark({
+        contentId: item.id,
         contentType: item.type || "movie",
         imdbId: item.imdbId || null,
         tmdbId: item.tmdbId || null,
         traktId: item.traktId || null,
-        title: item.title || item.name || item.id || "Untitled"
-      });
-      await watchProgressRepository.removeProgress(item.id);
-      return { type: "updated", state: { ...state, isWatched: false } };
-    }
-    await watchedItemsRepository.mark({
-      contentId: item.id,
-      contentType: item.type || "movie",
-      imdbId: item.imdbId || null,
-      tmdbId: item.tmdbId || null,
-      traktId: item.traktId || null,
-      title: item.title || item.name || item.id || "Untitled",
-      watchedAt: Date.now()
-    });
+        title: item.title || item.name || item.id || "Untitled",
+        watchedAt: Date.now()
+      })) === false
+    )
+      return false;
     await watchProgressRepository.saveProgress({
       contentId: item.id,
       imdbId: item.imdbId || null,
@@ -237,6 +255,8 @@ export function getPosterListPickerOptions(picker) {
       action: `toggleLibraryList:${tab.key}`,
       label: tab.title || tab.key,
       selected: membership[tab.key] === true,
+      // Android PosterListPickerDialog: the check follows the list name.
+      checkPlacement: "end",
       className: "poster-list-picker-list-button"
     })),
     {
@@ -352,6 +372,7 @@ export class PosterOptionsDialogController {
         key: option.action,
         selected: option.selected,
         className: option.className,
+        checkPlacement: option.checkPlacement,
         onAction: () => {
           void this.activateListPickerOption(option.action);
         }
@@ -415,7 +436,8 @@ export class PosterOptionsDialogController {
           error?.code === "SIMKL_DESTRUCTIVE_REMOVAL_REQUIRED";
         this.listPicker.error = this.listPicker.destructiveRemovalRequired
           ? "Removing this status will also clear watched history or a rating on Simkl. Confirm only if that is intended."
-          : t("detail_lists_save_failed", {}, "Could not save list changes.");
+          : trackingErrorMessage(error, null) ||
+            t("detail_lists_save_failed", {}, "Could not save list changes.");
         this.mountListPickerDialog();
       }
       return true;

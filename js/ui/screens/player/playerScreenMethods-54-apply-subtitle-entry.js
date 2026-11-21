@@ -79,6 +79,7 @@ export function createPlayerScreenMethods54() {
       }
       const selectionToken = Number(this.subtitleSelectionToken || 0) + 1;
       this.subtitleSelectionToken = selectionToken;
+      this.resetAutomaticSubtitleSyncState();
       const previousSubtitleSelectionKey = this.getActiveSubtitleSelectionKey();
 
       const isEmbeddedEntry = Object.prototype.hasOwnProperty.call(entry, "embeddedSubtitleTrackIndex");
@@ -115,7 +116,20 @@ export function createPlayerScreenMethods54() {
         // the UI entry does not carry embeddedSubtitleTrackIndex. Recover the
         // local metadata here before selecting AVPlay; otherwise the Tizen
         // extractor fallback is never activated for the normal UI path.
-        const tizenEmbeddedTrack = Environment.isTizen() ? this.getEmbeddedSubtitleTrackByNativeIndex(targetTrackIndex) : null;
+        const tizenEmbeddedTrack = Environment.isTizen()
+          ? this.getEmbeddedSubtitleTrackForAvPlayTrack(entry.track || {}, targetTrackIndex)
+          : null;
+        // AVPlay selects VobSub but does not draw it. Render this track from the
+        // container with the local bitmap decoder, keeping AVPlay silent.
+        if (
+          Environment.isTizen() &&
+          tizenEmbeddedTrack?.bitmapSubtitleFormat === "vobsub" &&
+          this.applyBitmapEmbeddedSubtitleTrack(tizenEmbeddedTrack, tizenEmbeddedTrack.embeddedTrackIndex, {
+            avplayTrackIndex: targetTrackIndex
+          })
+        ) {
+          return;
+        }
         const useTizenEmbeddedTextHtmlFallback = isTizenEmbeddedTextSubtitleFallbackTrack(tizenEmbeddedTrack);
         const applied =
           typeof PlayerController.setAvPlaySubtitleTrack === "function"
@@ -126,6 +140,7 @@ export function createPlayerScreenMethods54() {
         if (!applied) {
           return;
         }
+        this.clearBitmapSubtitleOverlay({ dispose: true });
         this.selectedSubtitleTrackIndex = Number.isFinite(targetTrackIndex) ? targetTrackIndex : -1;
         this.selectedEmbeddedSubtitleTrackIndex = -1;
         this.selectedAddonSubtitleId = null;
@@ -134,9 +149,16 @@ export function createPlayerScreenMethods54() {
         this.invalidateTrackDialogCaches();
         this.refreshSubtitleCueStyles();
         if (useTizenEmbeddedTextHtmlFallback) {
+          // A new track starts a fresh extractor attempt, so a previous
+          // track's service failure must not block its window.
+          this.clearWebOsEmbeddedTextSubtitleOverlay({ dispose: true });
           this.webOsEmbeddedTextSubtitleTrack = tizenEmbeddedTrack;
           this.webOsEmbeddedTextSubtitleUsingHtml = false;
           void this.loadWebOsEmbeddedTextSubtitleWindow(this.getPlaybackCurrentSeconds());
+        } else if (this.webOsEmbeddedTextSubtitleTrack) {
+          // Do not leave a previous SubRip/TX3G overlay or its callback
+          // delegation active after selecting a different AVPlay track.
+          this.clearWebOsEmbeddedTextSubtitleOverlay({ dispose: true });
         }
         this.renderControlButtons();
         this.renderSubtitleDialog();

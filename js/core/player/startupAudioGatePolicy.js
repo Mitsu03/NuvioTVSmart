@@ -24,6 +24,8 @@ export function selectStartupAudioFallbackOption(options = []) {
   const supportedOptions = (Array.isArray(options) ? options : []).filter(
     (entry) => entry?.supported !== false
   );
+  const compatible = supportedOptions.filter((entry) => !entry.requiresAudioConversion);
+  if (compatible.length) return compatible.find((entry) => entry?.selected) || compatible[0];
   return supportedOptions.find((entry) => entry?.selected) || supportedOptions[0] || null;
 }
 

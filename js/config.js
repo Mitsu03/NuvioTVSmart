@@ -23,6 +23,7 @@ export const IMDB_TAPFRAME_API_BASE_URL = String(
 export const MDBLIST_API_BASE_URL = String(
   runtimeEnv.MDBLIST_API_BASE_URL || "https://api.mdblist.com/"
 ).trim();
+export const MDBLIST_CLIENT_ID = String(runtimeEnv.MDBLIST_CLIENT_ID || "").trim();
 export const AVATAR_PUBLIC_BASE_URL = String(runtimeEnv.AVATAR_PUBLIC_BASE_URL || "").trim();
 export const UNIQUE_CONTRIBUTIONS_BASE_URL = String(
   runtimeEnv.UNIQUE_CONTRIBUTIONS_BASE_URL || ""
@@ -40,4 +41,10 @@ export const TRAKT_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob";
 export const SIMKL_CLIENT_ID = String(runtimeEnv.SIMKL_CLIENT_ID || "").trim();
 export const SIMKL_API_URL = "https://api.simkl.com";
 export const SIMKL_APP_NAME = String(runtimeEnv.SIMKL_APP_NAME || "nuvio").trim() || "nuvio";
+export const ANISKIP_API_URL = String(
+  runtimeEnv.ANISKIP_API_URL || "https://api.aniskip.com/v2/"
+).trim();
+export const ANIME_SKIP_API_URL = String(
+  runtimeEnv.ANIME_SKIP_API_URL || "https://api.anime-skip.com/"
+).trim();
 export const PREMIUMIZE_CLIENT_ID = String(runtimeEnv.PREMIUMIZE_CLIENT_ID || "").trim();

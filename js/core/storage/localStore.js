@@ -1,4 +1,10 @@
+let storageRevision = 0;
+const revisions = new Map();
+let clearRevision = 0;
 export const LocalStore = {
+  revision(key) {
+    return revisions.get(key) || clearRevision;
+  },
   get(key, defaultValue = null) {
     try {
       const value = localStorage.getItem(key);
@@ -12,6 +18,7 @@ export const LocalStore = {
   set(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
+      revisions.set(key, ++storageRevision);
     } catch (e) {
       console.error("LocalStore set error:", e);
     }
@@ -19,9 +26,12 @@ export const LocalStore = {
 
   remove(key) {
     localStorage.removeItem(key);
+    revisions.set(key, ++storageRevision);
   },
 
   clear() {
     localStorage.clear();
+    revisions.clear();
+    clearRevision = ++storageRevision;
   }
 };

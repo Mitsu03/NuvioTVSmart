@@ -1,5 +1,8 @@
+import { ensureHeroMdbListRatings } from "./homeHeroMdbListLoad.js";
 import * as internals from "./homeScreenContext.js";
 import { hasMountedHomeDom, updateHomeDom } from "./homeDomUpdate.js";
+import { supportsHomeGridRowWindow } from "./homeRowWindow.js";
+import { hasMarkedFirstHomePaint, markFirstHomePaint } from "../../../core/diagnostics/bootTiming.js";
 
 export function createHomeScreenMethods23() {
   const {
@@ -80,7 +83,8 @@ export function createHomeScreenMethods23() {
         heroItem = { ...heroItem, heroMetaEnriching: true };
         this.heroItem = heroItem;
       }
-      const showHeroSection = Boolean(this.layoutPrefs?.heroSectionEnabled) && Boolean(heroItem);
+      const modernCarouselHasContent = this.layoutMode === "modern" && Boolean(this.rows?.length || this.continueWatchingDisplay?.length);
+      const showHeroSection = (modernCarouselHasContent || Boolean(this.layoutPrefs?.heroSectionEnabled)) && Boolean(heroItem);
       const modernLandscapePostersEnabled = this.layoutMode === "modern" && Boolean(this.layoutPrefs?.modernLandscapePostersEnabled);
       const modernLandscapeLayoutClass = modernLandscapePostersEnabled ? " home-modern-landscape-posters" : "";
       const modernHeroFullScreenBackdropClass =
@@ -163,9 +167,11 @@ export function createHomeScreenMethods23() {
           ? HOME_GRID_SAFE_MAX_COLUMNS * homeGridRowCount
           : rowItemLimit;
       this.teardownGridStickyHeader();
+      this.renderedWatchedTitleIds = this.watchedTitleIds;
 
       let mainContentMarkup = "";
       let modernLayoutPayload = null;
+      let legacyRowsPayload = null;
 
       if (this.isInitialHomeLoading) {
         mainContentMarkup = renderHomeLoadingState();
@@ -199,6 +205,8 @@ export function createHomeScreenMethods23() {
           formatCatalogRowTitle,
           shouldDeferRowImages: shouldDeferHomeRowImages,
           watchedTitleIds: this.watchedTitleIds,
+          rowMarkupCache: (this.rowMarkupCache = this.rowMarkupCache || new WeakMap()),
+          mountedRowMarkups: canUpdateInPlace ? this.renderedRowMarkups : null,
           escapeHtml,
           escapeAttribute
         });
@@ -228,7 +236,7 @@ export function createHomeScreenMethods23() {
               cardStyle: this.layoutPrefs?.continueWatchingCardStyle || "card"
             })
           : "";
-        const legacyRowsPayload = renderLegacyCatalogRowsMarkup(this.rows, {
+        legacyRowsPayload = renderLegacyCatalogRowsMarkup(this.rows, {
           layoutMode: this.layoutMode,
           showPosterLabels,
           showCatalogAddonName,
@@ -238,7 +246,8 @@ export function createHomeScreenMethods23() {
           expandFocusedPoster: false,
           rowItemLimit: classicCatalogRowItemLimit,
           gridMaxDisplayItems,
-          watchedTitleIds: this.watchedTitleIds
+          watchedTitleIds: this.watchedTitleIds,
+          mountedRowMarkups: canUpdateInPlace ? this.renderedRowMarkups : null
         });
         this.catalogSeeAllMap = legacyRowsPayload.catalogSeeAllMap;
         mainContentMarkup = `
@@ -301,17 +310,47 @@ export function createHomeScreenMethods23() {
           this.cancelFocusedPosterFlow();
           this.expandedPosterNode = null;
         }
-        updatedInPlace = updateHomeDom(this.container, nextMarkup, {
+        // Rows whose markup is the one already mounted are not parsed again.
+        const rowsPayload = modernLayoutPayload || legacyRowsPayload;
+        const previousRowMarkups = this.renderedRowMarkups;
+        const domMarkup = rowsPayload ? nextMarkup.replace(rowsPayload.markup, () => rowsPayload.domMarkup) : nextMarkup;
+        this.renderedRowMarkups = rowsPayload?.rowMarkups || null;
+        updatedInPlace = updateHomeDom(this.container, domMarkup, {
           incremental: canUpdateInPlace,
           focusedNode: liveFocusedNode
         });
+        if (updatedInPlace && legacyRowsPayload && this.homeRowWindow) {
+          // A parked row rewritten in place keeps its old pinned height (a Grid
+          // section can change its number of lines): measure it again, the window
+          // parks it back on the next frame.
+          const changedRowKeys = [];
+          legacyRowsPayload.rowMarkups.forEach((markup, rowKey) => {
+            if (previousRowMarkups?.get(rowKey) !== markup) {
+              changedRowKeys.push(rowKey);
+            }
+          });
+          this.homeRowWindow.ensureRowKeysReady(changedRowKeys);
+        }
         this.renderedMarkup = nextMarkup;
+        if (!hasMarkedFirstHomePaint()) {
+          // Boot timing only: the first Home DOM commit is about to paint.
+          if (typeof globalThis.requestAnimationFrame === "function") {
+            globalThis.requestAnimationFrame(() => markFirstHomePaint());
+          } else {
+            setTimeout(() => markFirstHomePaint(), 0);
+          }
+        }
       }
+      this.applyHeroDescriptionAutoScroll?.();
+      this.homeGridColumnCount = null;
       if (this.layoutMode === "grid") {
-        normalizeHomeGridCatalogSections(this.container, {
+        const gridColumnCount = normalizeHomeGridCatalogSections(this.container, {
           maxDisplayItems: gridMaxDisplayItems,
           rowCount: homeGridRowCount
         });
+        // The flex fallback (no CSS grid) can wrap unequal cards: it keeps the
+        // geometric grouping and no row window.
+        this.homeGridColumnCount = supportsHomeGridRowWindow() ? gridColumnCount : null;
       }
       const focusSurvived = Boolean(
         updatedInPlace &&
@@ -475,6 +514,7 @@ export function createHomeScreenMethods23() {
       this.renderedLayoutMode = this.layoutMode;
       this.ensureHomeTruncationObservers();
       this.scheduleHomeTruncationUpdate();
+      void ensureHeroMdbListRatings.call(this);
       this.scheduleHomeLazyImageHydration(null, { refreshIndex: true });
       this.scheduleReturnFocusRestore();
       const mountedRows = Number(this.navModel?.rows?.length || 0);

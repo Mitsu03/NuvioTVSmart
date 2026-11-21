@@ -24,28 +24,39 @@ export function createHomeScreenMethods09() {
         return false;
       }
       if (this.isContinueWatchingItemWatched(normalized)) {
-        await watchedItemsRepository.unmark(normalized.contentId, {
-          contentType: normalized.type || "movie",
-          imdbId: normalized.imdbId || null,
-          tmdbId: normalized.tmdbId || null,
-          traktId: normalized.traktId || null,
-          title: normalized.title || normalized.contentId || "Untitled"
-        });
-        this.watchedItems = Array.isArray(this.watchedItems)
-          ? this.watchedItems.filter((entry) => !watchedItemsShareIdentity(entry, normalized))
-          : [];
+        if (
+          (await watchedItemsRepository.unmark(normalized.contentId, {
+            contentType: normalized.type || "movie",
+            season: normalized.season ?? null,
+            episode: normalized.episode ?? null,
+            videoId: normalized.videoId || null,
+            imdbId: normalized.imdbId || null,
+            tmdbId: normalized.tmdbId || null,
+            traktId: normalized.traktId || null,
+            title: normalized.title || normalized.contentId || "Untitled"
+          })) === false
+        )
+          return false;
+        await watchProgressRepository.removeProgress(normalized.contentId, normalized.videoId || null);
+        this.watchedItems = await watchedItemsRepository.getAll(2000).catch(() => this.watchedItems);
         this.watchedTitleIds = buildWatchedTitleIdSet(this.watchedItems);
         return true;
       }
-      await watchedItemsRepository.mark({
-        contentId: normalized.contentId,
-        contentType: normalized.type || "movie",
-        imdbId: normalized.imdbId || null,
-        tmdbId: normalized.tmdbId || null,
-        traktId: normalized.traktId || null,
-        title: normalized.title || normalized.contentId || "Untitled",
-        watchedAt: Date.now()
-      });
+      if (
+        (await watchedItemsRepository.mark({
+          contentId: normalized.contentId,
+          contentType: normalized.type || "movie",
+          season: normalized.season ?? null,
+          episode: normalized.episode ?? null,
+          videoId: normalized.videoId || null,
+          imdbId: normalized.imdbId || null,
+          tmdbId: normalized.tmdbId || null,
+          traktId: normalized.traktId || null,
+          title: normalized.title || normalized.contentId || "Untitled",
+          watchedAt: Date.now()
+        })) === false
+      )
+        return false;
       await watchProgressRepository.saveProgress({
         contentId: normalized.contentId,
         imdbId: normalized.imdbId || null,
@@ -59,23 +70,22 @@ export function createHomeScreenMethods09() {
         durationMs: 100,
         updatedAt: Date.now()
       });
-      this.watchedItems = [
-        {
-          contentId: normalized.contentId,
-          contentType: normalized.type || "movie",
-          imdbId: normalized.imdbId || null,
-          tmdbId: normalized.tmdbId || null,
-          traktId: normalized.traktId || null,
-          title: normalized.title || normalized.contentId || "Untitled",
-          watchedAt: Date.now()
-        },
-        ...(Array.isArray(this.watchedItems)
-          ? this.watchedItems.filter((entry) => String(entry?.contentId || "") !== String(normalized.contentId))
-          : [])
-      ];
+      this.watchedItems = await watchedItemsRepository.getAll(2000).catch(() => this.watchedItems);
       this.watchedTitleIds = buildWatchedTitleIdSet(this.watchedItems);
       this.pruneContinueWatchingItem(normalized);
       return true;
+    },
+    async markContinueWatchingItemWatched(item) {
+      const normalized = normalizeContinueWatchingItem(item);
+      if (!normalized?.contentId) {
+        return false;
+      }
+      if (this.isContinueWatchingItemWatched(normalized)) {
+        // Already watched: the menu action only has to drop the row.
+        this.pruneContinueWatchingItem(normalized);
+        return true;
+      }
+      return this.toggleContinueWatchingWatched(normalized);
     },
     async removeContinueWatchingItem(item) {
       const normalized = normalizeContinueWatchingItem(item);
@@ -121,7 +131,11 @@ export function createHomeScreenMethods09() {
       if (option.action === "details") {
         return this.openContinueWatchingDetails(item);
       }
-      if (option.action === "remove") {
+      if (option.action === "markWatched") {
+        if (!(await this.markContinueWatchingItemWatched(item))) {
+          return false;
+        }
+      } else if (option.action === "remove") {
         await this.removeContinueWatchingItem(item);
       } else {
         return false;
@@ -162,13 +176,17 @@ export function createHomeScreenMethods09() {
       );
       if (isSeriesTypeForContinueWatching(item.type)) {
         if (watched) {
-          await watchedSeriesReconciliationService.unmarkSeriesWatched(item.id, {
-            contentType: item.type || "series"
-          });
+          if (
+            (await watchedSeriesReconciliationService.unmarkSeriesWatched(item.id, {
+              contentType: item.type || "series"
+            })) === false
+          )
+            return false;
         } else {
-          await watchedSeriesReconciliationService.markSeriesWatched(item.id, item.type || "series", {
+          const marked = await watchedSeriesReconciliationService.markSeriesWatched(item.id, item.type || "series", {
             title: item.name || item.id || "Untitled"
           });
+          if (!marked) return false;
         }
         this.watchedItems = await watchedItemsRepository.getAll(2000).catch(() => this.watchedItems);
         this.watchedTitleIds = buildWatchedTitleIdSet(this.watchedItems);
@@ -179,13 +197,16 @@ export function createHomeScreenMethods09() {
         return true;
       }
       if (watched) {
-        await watchedItemsRepository.unmark(item.id, {
-          contentType: item.type || "movie",
-          imdbId: item.imdbId || null,
-          tmdbId: item.tmdbId || null,
-          traktId: item.traktId || null,
-          title: item.name || item.id || "Untitled"
-        });
+        if (
+          (await watchedItemsRepository.unmark(item.id, {
+            contentType: item.type || "movie",
+            imdbId: item.imdbId || null,
+            tmdbId: item.tmdbId || null,
+            traktId: item.traktId || null,
+            title: item.name || item.id || "Untitled"
+          })) === false
+        )
+          return false;
         await watchProgressRepository.removeProgress(item.id, null).catch(() => false);
         this.watchedItems = Array.isArray(this.watchedItems)
           ? this.watchedItems.filter((entry) => !watchedItemsShareIdentity(entry, item))
@@ -196,15 +217,18 @@ export function createHomeScreenMethods09() {
         }
         return true;
       }
-      await watchedItemsRepository.mark({
-        contentId: item.id,
-        contentType: item.type || "movie",
-        imdbId: item.imdbId || null,
-        tmdbId: item.tmdbId || null,
-        traktId: item.traktId || null,
-        title: item.name || item.id || "Untitled",
-        watchedAt: Date.now()
-      });
+      if (
+        (await watchedItemsRepository.mark({
+          contentId: item.id,
+          contentType: item.type || "movie",
+          imdbId: item.imdbId || null,
+          tmdbId: item.tmdbId || null,
+          traktId: item.traktId || null,
+          title: item.name || item.id || "Untitled",
+          watchedAt: Date.now()
+        })) === false
+      )
+        return false;
       await watchProgressRepository.saveProgress({
         contentId: item.id,
         imdbId: item.imdbId || null,
@@ -297,7 +321,7 @@ export function createHomeScreenMethods09() {
     openContinueWatchingFromNode(node) {
       const item = this.getContinueWatchingItemFromNode(node);
       this.rememberReturnFocusForNode(node);
-      this.openContinueWatchingFromItem(item);
+      this.openContinueWatchingSelection(item);
     }
   };
 }

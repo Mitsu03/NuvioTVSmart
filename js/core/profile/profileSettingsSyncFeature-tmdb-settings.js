@@ -103,7 +103,7 @@ export const tmdb_settings = {
       tmdb_use_artwork: settings.useArtwork !== false,
       tmdb_use_basic_info: settings.useBasicInfo !== false,
       tmdb_use_details: settings.useDetails !== false,
-      tmdb_use_release_dates: settings.useReleaseDates !== false,
+      tmdb_use_release_dates: settings.useReleaseDates === true,
       tmdb_use_credits: settings.useCredits !== false,
       tmdb_use_productions: settings.useProductions !== false,
       tmdb_use_networks: settings.useNetworks !== false,

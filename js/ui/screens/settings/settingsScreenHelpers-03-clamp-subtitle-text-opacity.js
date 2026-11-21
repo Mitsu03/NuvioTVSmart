@@ -42,8 +42,6 @@ import {
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
 
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
-
 import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
 
 import { ExperienceModeStore } from "../../../data/local/experienceModeStore.js";
@@ -268,6 +266,8 @@ export const HOME_LAYOUT_OPTIONS = [
 export const TRAKT_CONTINUE_WATCHING_DAY_OPTIONS = [14, 30, 60, 90, 180, 365, TRAKT_CONTINUE_WATCHING_DAYS_CAP_ALL];
 
 export const TRAKT_WATCH_PROGRESS_OPTIONS = [
+  { id: WatchProgressSource.MDBLIST, label: "MDBList" },
+  { id: WatchProgressSource.SIMKL, label: "Simkl" },
   { id: WatchProgressSource.TRAKT, labelKey: "trakt_watch_progress_source_trakt" },
   { id: WatchProgressSource.NUVIO_SYNC, labelKey: "trakt_watch_progress_source_nuvio" }
 ];
@@ -293,11 +293,13 @@ export const SECTION_META = [
     labelKey: "settings.sections.profiles.label",
     subtitleKey: "settings.sections.profiles.subtitle"
   },
+  { id: "watchParty", labelKey: "party_title", subtitleKey: "party_settings_description" },
   {
     id: "appearance",
     labelKey: "settings.sections.appearance.label",
     subtitleKey: "settings.sections.appearance.subtitle"
   },
+  { id: "ambient", labelKey: "ambient_mode_title", subtitleKey: "ambient_mode_subtitle" },
   {
     id: "layout",
     labelKey: "settings.sections.layout.label",
@@ -351,6 +353,7 @@ export const SECTION_META = [
 export const SECTION_ICONS = {
   account: "person",
   profiles: "people",
+  watchParty: "groups",
   appearance: "palette",
   layout: "grid_view",
   contentDiscovery: "explore",
