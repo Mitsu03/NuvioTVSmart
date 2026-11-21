@@ -1,6 +1,7 @@
 import { createProfileScopedStore } from "./profileScopedStore.js";
 import {
   normalizeStreamBadgeRules,
+  prepareStreamBadgeRules,
   parseStreamBadgeRulesFromPayload,
   STREAM_BADGE_IMPORT_LIMIT
 } from "../../core/streams/streamBadgeRules.js";
@@ -12,7 +13,9 @@ const DEFAULT_STREAM_BADGE_SETTINGS = {
   rules: { imports: [] },
   showFileSizeBadges: true,
   showAddonLogo: true,
-  badgePlacement: "BOTTOM"
+  badgePlacement: "BOTTOM",
+  showInPlayer: false,
+  playerBadgeSource: ""
 };
 
 function normalizeBadgePlacement(value = "") {
@@ -42,7 +45,9 @@ function normalizeStreamBadgeSettings(value = {}) {
     rules: normalizeStreamBadgeRules(rulesSource),
     showFileSizeBadges: showFileSizeBadges !== false,
     showAddonLogo: showAddonLogo !== false,
-    badgePlacement: normalizeBadgePlacement(badgePlacement)
+    badgePlacement: normalizeBadgePlacement(badgePlacement),
+    showInPlayer: (source.showInPlayer ?? source.show_badges_in_player) === true,
+    playerBadgeSource: String(source.playerBadgeSource ?? source.player_badge_source ?? "").trim()
   };
 }
 
@@ -204,8 +209,34 @@ export const StreamBadgeSettingsStore = {
     store.set({ badgePlacement: normalizeBadgePlacement(placement) });
   },
 
+  setShowInPlayer(enabled) {
+    store.set({ showInPlayer: Boolean(enabled) });
+  },
+
+  setPlayerBadgeSource(sourceUrl) {
+    store.set({ playerBadgeSource: String(sourceUrl || "").trim() });
+  },
+
   snapshot() {
-    return normalizeStreamBadgeSettings(this.get());
+    const settings = normalizeStreamBadgeSettings(this.get());
+    const source = settings.playerBadgeSource.toLowerCase();
+    const hasSource = settings.rules.imports.some(
+      (entry) => entry.sourceUrl.toLowerCase() === source
+    );
+    settings.playerRules = settings.showInPlayer
+      ? prepareStreamBadgeRules(
+          hasSource
+            ? {
+                imports: settings.rules.imports.map((entry) => ({
+                  ...entry,
+                  isActive: entry.sourceUrl.toLowerCase() === source
+                }))
+              }
+            : settings.rules
+        )
+      : null;
+    settings.rules = prepareStreamBadgeRules(settings.rules);
+    return settings;
   }
 };
 

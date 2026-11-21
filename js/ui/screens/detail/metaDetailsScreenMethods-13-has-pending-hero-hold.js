@@ -1,3 +1,4 @@
+import { detailShuffleSettings, openDetailShuffle } from "./detailEpisodeShuffle.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./metaDetailsScreenContext.js";
 
@@ -146,7 +147,7 @@ export function createMetaDetailsScreenMethods13() {
         };
       }
       const resume = progress || (useActiveFallback ? this.getActiveResumeProgress() : null);
-      if (!resume || !isWatchProgressInProgress(resume)) {
+      if (!resume || (!isWatchProgressInProgress(resume) && resume !== this.shuffleResumeProgress)) {
         return {};
       }
       const params = {
@@ -160,6 +161,10 @@ export function createMetaDetailsScreenMethods13() {
       const startOver = Boolean(options?.startOver);
       const manualSelection = Boolean(options?.manualSelection);
       if (isSeriesDetailMeta(this.meta, this.episodes)) {
+        if (detailShuffleSettings(this).enabled && !this.nextEpisodeToWatch) {
+          openDetailShuffle(this);
+          return;
+        }
         const targetEpisode =
           this.nextEpisodeToWatch || this.episodes?.find((entry) => entry.season === this.selectedSeason) || this.episodes?.[0] || null;
         if (targetEpisode?.id) {

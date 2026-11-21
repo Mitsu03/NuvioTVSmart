@@ -1,3 +1,4 @@
+import { ProfileManager } from "../../core/profile/profileManager.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./traktAuthService.js";
 
@@ -33,11 +34,12 @@ export function createTraktAuthServiceMethods01() {
       return TraktAuthStore.isAuthenticated();
     },
     async startDeviceAuth() {
+      const profileId = ProfileManager.getActiveProfileId();
       if (!hasRequiredCredentials()) {
         throw new Error("Missing TRAKT credentials");
       }
 
-      const current = TraktAuthStore.get();
+      const current = TraktAuthStore.get(profileId);
       if (current.deviceCode && current.expiresAt && Date.now() < Number(current.expiresAt)) {
         return current;
       }
@@ -70,18 +72,19 @@ export function createTraktAuthServiceMethods01() {
         throw new Error(normalizeAuthErrorMessage(payload, `Failed to start Trakt auth (${response.status})`));
       }
 
-      return TraktAuthStore.saveDeviceFlow(payload);
+      return TraktAuthStore.saveDeviceFlow(payload, profileId);
     },
     async pollDeviceToken() {
+      const profileId = ProfileManager.getActiveProfileId();
       if (!hasRequiredCredentials()) {
         return { type: "failed", message: "Missing TRAKT credentials" };
       }
-      const state = TraktAuthStore.get();
+      const state = TraktAuthStore.get(profileId);
       if (!state.deviceCode) {
         return { type: "failed", message: "No active Trakt device code" };
       }
       if (state.expiresAt && Date.now() >= Number(state.expiresAt)) {
-        TraktAuthStore.clearDeviceFlow();
+        TraktAuthStore.clearDeviceFlow(profileId);
         return { type: "expired" };
       }
 
@@ -94,9 +97,13 @@ export function createTraktAuthServiceMethods01() {
         }
       });
 
+      if (ProfileManager.getActiveProfileId() !== profileId || TraktAuthStore.get(profileId).deviceCode !== state.deviceCode) {
+        return { type: "failed", message: "Trakt authentication session changed" };
+      }
+
       if (response.ok && payload) {
-        TraktAuthStore.saveToken(payload);
-        const username = await fetchUserSettings();
+        TraktAuthStore.saveToken(payload, profileId);
+        const username = await fetchUserSettings(profileId);
         return { type: "approved", username };
       }
 
@@ -104,20 +111,20 @@ export function createTraktAuthServiceMethods01() {
         return { type: "pending" };
       }
       if (response.status === 409) {
-        TraktAuthStore.clearDeviceFlow();
+        TraktAuthStore.clearDeviceFlow(profileId);
         return { type: "already_used" };
       }
       if (response.status === 410) {
-        TraktAuthStore.clearDeviceFlow();
+        TraktAuthStore.clearDeviceFlow(profileId);
         return { type: "expired" };
       }
       if (response.status === 418) {
-        TraktAuthStore.clearDeviceFlow();
+        TraktAuthStore.clearDeviceFlow(profileId);
         return { type: "denied" };
       }
       if (response.status === 429) {
         const interval = Math.min(60, Math.max(5, Number(state.pollInterval || 5) + 5));
-        TraktAuthStore.updatePollInterval(interval);
+        TraktAuthStore.updatePollInterval(interval, profileId);
         return { type: "slow_down", pollIntervalSeconds: interval };
       }
       return {
@@ -126,10 +133,11 @@ export function createTraktAuthServiceMethods01() {
       };
     },
     async refreshTokenIfNeeded(force = false) {
+      const profileId = ProfileManager.getActiveProfileId();
       if (!hasRequiredCredentials()) {
         return false;
       }
-      const state = TraktAuthStore.get();
+      const state = TraktAuthStore.get(profileId);
       if (!state.refreshToken) {
         return false;
       }
@@ -148,32 +156,35 @@ export function createTraktAuthServiceMethods01() {
         }
       });
 
+      if (TraktAuthStore.get(profileId).refreshToken !== state.refreshToken) return false;
       if (!response.ok || !payload) {
         if (response.status === 400 || response.status === 401 || response.status === 403) {
-          TraktAuthStore.clearAuth();
+          TraktAuthStore.clearAuth(profileId);
         }
         return false;
       }
-      TraktAuthStore.saveToken(payload);
-      await fetchUserSettings();
+      TraktAuthStore.saveToken(payload, profileId);
+      await fetchUserSettings(profileId);
       return true;
     },
     async getValidAccessToken() {
-      const state = TraktAuthStore.get();
+      const profileId = ProfileManager.getActiveProfileId();
+      const state = TraktAuthStore.get(profileId);
       if (!state.accessToken) {
         return null;
       }
       if (isTokenExpiredOrExpiring(state)) {
         const refreshed = await this.refreshTokenIfNeeded(true);
-        if (!refreshed) {
+        if (!refreshed || ProfileManager.getActiveProfileId() !== profileId) {
           return null;
         }
-        return TraktAuthStore.get().accessToken;
+        return TraktAuthStore.get(profileId).accessToken;
       }
       return state.accessToken;
     },
     async disconnect() {
-      const state = TraktAuthStore.get();
+      const profileId = ProfileManager.getActiveProfileId();
+      const state = TraktAuthStore.get(profileId);
       if (hasRequiredCredentials() && state.accessToken) {
         try {
           await requestJson("/oauth/revoke", {
@@ -189,7 +200,9 @@ export function createTraktAuthServiceMethods01() {
         }
       }
       internals.detailWatchedEnrichmentService.invalidateAllCache();
-      TraktAuthStore.clearAuth();
+      if (TraktAuthStore.get(profileId).accessToken === state.accessToken) {
+        TraktAuthStore.clearAuth(profileId);
+      }
     },
     async fetchStats(forceRefresh = false) {
       const state = TraktAuthStore.get();
@@ -225,7 +238,7 @@ export function createTraktAuthServiceMethods01() {
     },
     async fetchWatchHistory({ limit = 100 } = {}) {
       const token = await this.getValidAccessToken();
-      if (!token) return [];
+      if (!token) throw new Error("Trakt is not connected");
 
       const allItems = [];
       let page = 1;
@@ -235,7 +248,7 @@ export function createTraktAuthServiceMethods01() {
         const { response, payload } = await requestJson(`/sync/history?limit=${perPage}&page=${page}`, {
           authorization: `Bearer ${token}`
         });
-        if (!response.ok || !Array.isArray(payload)) break;
+        if (!response.ok || !Array.isArray(payload)) throw new Error("Trakt history request failed");
 
         allItems.push(...payload.map(normalizeHistoryItem).filter(Boolean));
         if (payload.length < perPage) break;
@@ -267,7 +280,7 @@ export function createTraktAuthServiceMethods01() {
     },
     async fetchPlaybackState({ limit = 50 } = {}) {
       const token = await this.getValidAccessToken();
-      if (!token) return [];
+      if (!token) throw new Error("Trakt is not connected");
 
       // Trakt requires a media type in the playback path. Fetch both types so
       // the projection matches Android TV instead of silently receiving an
@@ -277,11 +290,22 @@ export function createTraktAuthServiceMethods01() {
           const { response, payload } = await requestJson(`/sync/playback/${type}?limit=${limit}`, {
             authorization: `Bearer ${token}`
           });
-          return response.ok && Array.isArray(payload) ? payload : [];
+          if (!response.ok || !Array.isArray(payload)) throw new Error(`Trakt ${type} playback request failed`);
+          return payload;
         })
       );
 
       return payloads.flat().map(normalizePlaybackItem).filter(Boolean);
+    },
+    async fetchLastActivities() {
+      const token = await this.getValidAccessToken();
+      if (!token) throw new Error("Trakt is not connected");
+
+      const { response, payload } = await requestJson("/sync/last_activities", {
+        authorization: `Bearer ${token}`
+      });
+      if (!response.ok) throw new Error("Trakt last activities request failed");
+      return payload;
     },
     async fetchWatchedShows() {
       const token = await this.getValidAccessToken();
@@ -317,6 +341,22 @@ export function createTraktAuthServiceMethods01() {
       if (!response.ok || !payload) return null;
 
       return normalizeWatchedProgress(payload);
+    },
+    /**
+     * Every episode Trakt knows for a show, used to translate between the add-on's and
+     * Trakt's numbering. Android requests the same `extended=episodes` seasons payload.
+     */
+    async fetchShowSeasons(showTraktId) {
+      const id = String(showTraktId || "").trim();
+      if (!id) return null;
+      const token = await this.getValidAccessToken();
+      if (!token) return null;
+
+      const { response, payload } = await requestJson(`/shows/${encodeURIComponent(id)}/seasons?extended=episodes`, {
+        authorization: `Bearer ${token}`
+      });
+      if (!response.ok || !Array.isArray(payload)) return null;
+      return payload;
     }
   };
 }

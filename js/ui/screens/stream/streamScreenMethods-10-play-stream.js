@@ -1,3 +1,4 @@
+import { activeStreamLinkProfile } from "../../../data/local/streamLinkCacheStore.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./streamScreen.js";
 
@@ -15,7 +16,9 @@ export function createStreamScreenMethods10() {
   } = internals;
 
   return {
-    async playStream(streamId) {
+    async playStream(streamId, { cachedLink = null, autoSelected = false } = {}) {
+      const loadToken = this.loadToken;
+      const profileId = activeStreamLinkProfile();
       this.cancelAutoPlayCountdown();
       this.cancelAutoPlaySelectionWait();
       const filtered = this.getFilteredStreams();
@@ -56,6 +59,7 @@ export function createStreamScreenMethods10() {
         resumeDurationMs = Number(resumeProgress?.durationMs || 0) || resumeDurationMs;
       }
 
+      if (loadToken !== this.loadToken || Router.getCurrent() !== "stream" || profileId !== activeStreamLinkProfile()) return;
       Router.navigate("player", {
         streamUrl: selected.url || selected.externalUrl || null,
         itemId: this.params?.itemId || null,
@@ -63,7 +67,12 @@ export function createStreamScreenMethods10() {
         imdbId: this.params?.imdbId || null,
         tmdbId: this.params?.tmdbId || this.params?.tmdb_id || null,
         traktId: this.params?.traktId || this.params?.trakt_id || null,
-        contentLanguage: this.params?.contentLanguage || this.params?.originalLanguage || this.params?.original_language || null,
+        contentLanguage:
+          cachedLink?.contentLanguage ||
+          this.params?.contentLanguage ||
+          this.params?.originalLanguage ||
+          this.params?.original_language ||
+          null,
         videoId: this.params?.videoId || null,
         resumePositionMs,
         resumeProgressPercent,
@@ -73,7 +82,7 @@ export function createStreamScreenMethods10() {
         playerTitle: this.params?.itemTitle || this.params?.playerTitle || "Untitled",
         playerSubtitle: this.params?.episodeTitle || this.params?.playerSubtitle || "",
         playerEpisodeTitle: this.params?.episodeTitle || "",
-        playerReleaseYear: this.params?.year || "",
+        playerReleaseYear: cachedLink?.year || this.params?.year || "",
         playerBackdropUrl: this.getBackdropUrl() || null,
         playerLogoUrl: this.params?.logo || null,
         parentalWarnings: this.params?.parentalWarnings || null,
@@ -93,6 +102,9 @@ export function createStreamScreenMethods10() {
           selectedStreamId: selected.id || ""
         },
         returnToStreamOnBack: true,
+        fromLinkCache: Boolean(cachedLink),
+        // Android autoPlayNav: picked by auto source selection, so it may fall back.
+        autoPlayNav: Boolean(autoSelected),
         streamRouteParams: this.params ? { ...this.params } : null,
         fromDetailRoute: Boolean(this.params?.fromDetailRoute),
         nextEpisodeVideoId: this.params?.nextEpisodeVideoId || null,
@@ -104,6 +116,12 @@ export function createStreamScreenMethods10() {
         nextEpisodeMetadataResolved: this.params?.nextEpisodeMetadataResolved ?? null
       });
     },
+    refreshStreams() {
+      this.cancelAutoPlayCountdown();
+      this.streamVirtualFocusReset = true;
+      void this.loadStreams({ forceRefresh: true });
+      this.render();
+    },
     onPointerFocus(target) {
       if (!target || !this.container?.contains(target)) {
         return false;
@@ -112,12 +130,14 @@ export function createStreamScreenMethods10() {
       const chipTarget = target.closest?.(".stream-route-chip.focusable") || target;
       const chipIndex = chips.indexOf(chipTarget);
       if (chipIndex >= 0) {
+        this.streamUserMovedFocus = true;
         this.focusState = { zone: "filter", index: chipIndex };
         this.focusList(chips, chipIndex);
         return true;
       }
       const cardAction = target.closest?.("[data-stream-row][data-card-action]");
       if (cardAction) {
+        this.streamUserMovedFocus = true;
         this.focusState = {
           zone: "card",
           row: Math.max(0, Number(cardAction.dataset.streamRow || 0)),
@@ -135,6 +155,10 @@ export function createStreamScreenMethods10() {
       const actionTarget = target.closest?.("[data-action]") || target;
       this.onPointerFocus(actionTarget);
       const action = String(actionTarget.dataset.action || "");
+      if (action === "refreshStreams") {
+        this.refreshStreams();
+        return true;
+      }
       if (action === "setFilter") {
         const addon = String(actionTarget.dataset.addon || "all");
         const { chips } = this.getFocusLists();
@@ -182,6 +206,7 @@ export function createStreamScreenMethods10() {
         this.streamLastNavigationRepeatAt = now;
       }
       if (direction) {
+        this.streamUserMovedFocus = true;
         let { chips, rows, rowCount, virtualized } = this.getFocusLists();
         const zone = this.focusState?.zone || (rowCount ? "card" : "filter");
         let index = Number(this.focusState?.index || 0);
@@ -197,23 +222,16 @@ export function createStreamScreenMethods10() {
         }
 
         if (zone === "filter") {
-          if (direction === "left") {
+          if (direction === "left" || direction === "right") {
             if (chips.length) {
-              const ordered = ["all", ...this.getOrderedFilterNames()];
-              const currentFilter = ordered[clamp(index, 0, ordered.length - 1)] || "all";
-              const currentPosition = ordered.indexOf(currentFilter);
-              const nextFilter = ordered[clamp(currentPosition - 1, 0, ordered.length - 1)];
-              this.setAddonFilter(nextFilter, "filter", clamp(index - 1, 0, Math.max(0, chips.length - 1)));
-            }
-            return;
-          }
-          if (direction === "right") {
-            if (chips.length) {
-              const ordered = ["all", ...this.getOrderedFilterNames()];
-              const currentFilter = ordered[clamp(index, 0, ordered.length - 1)] || "all";
-              const currentPosition = ordered.indexOf(currentFilter);
-              const nextFilter = ordered[clamp(currentPosition + 1, 0, ordered.length - 1)];
-              this.setAddonFilter(nextFilter, "filter", clamp(index + 1, 0, Math.max(0, chips.length - 1)));
+              const nextIndex = clamp(index + (direction === "left" ? -1 : 1), 0, chips.length - 1);
+              const target = chips[nextIndex];
+              if (target?.dataset.action === "refreshStreams") {
+                this.focusState = { zone: "filter", index: nextIndex };
+                this.applyFocus();
+              } else {
+                this.setAddonFilter(String(target?.dataset.addon || "all"), "filter", nextIndex);
+              }
             }
             return;
           }
@@ -242,7 +260,7 @@ export function createStreamScreenMethods10() {
             }
             this.focusState = {
               zone: "filter",
-              index: clamp(["all", ...this.getOrderedFilterNames()].indexOf(this.addonFilter), 0, Math.max(0, chips.length - 1))
+              index: 1 + Math.max(0, ["all", ...this.getOrderedFilterNames()].indexOf(this.addonFilter))
             };
             this.applyFocus();
             return;
@@ -300,6 +318,10 @@ export function createStreamScreenMethods10() {
         return;
       }
       const action = String(current.dataset.action || "");
+      if (action === "refreshStreams") {
+        this.refreshStreams();
+        return;
+      }
       if (action === "setFilter") {
         const addon = String(current.dataset.addon || "all");
         this.setAddonFilter(addon, "filter", Array.from(this.container.querySelectorAll(".stream-route-chip.focusable")).indexOf(current));

@@ -87,7 +87,8 @@ export function createServerConfiguration({
   const normalizedKey = String(publishableKey || "").trim();
   const normalizedCapabilities = {
     emailPasswordAuth: capabilities?.emailPasswordAuth === true,
-    tvLogin: capabilities?.tvLogin === true
+    tvLogin: capabilities?.tvLogin === true,
+    watchParty: capabilities?.watchParty === true
   };
   if (
     isCustom &&
@@ -131,6 +132,10 @@ export function supportsTvLogin(configuration) {
     configuration?.publishableKey &&
     configuration?.capabilities?.tvLogin
   );
+}
+
+export function supportsWatchParty(configuration) {
+  return Boolean(configuration?.capabilities?.watchParty);
 }
 
 export function supportsEmailPasswordAuth(configuration) {

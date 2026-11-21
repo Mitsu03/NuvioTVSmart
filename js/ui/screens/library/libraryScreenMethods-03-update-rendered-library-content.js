@@ -1,3 +1,4 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./libraryScreen.js";
 import { calculateAdaptivePosterGridMetrics } from "./libraryPosterGridLayout.js";
@@ -64,7 +65,10 @@ export function createLibraryScreenMethods03() {
       });
     },
     updateRenderedLibraryContent(state, { preservePickerRow = true, preserveFocus = null } = {}) {
-      if (!this.container || !this.container.querySelector(".library-shell")) {
+      const contentMount = this.container?.querySelector("#libraryContentAreaMount");
+      // The loading shell has no content to refresh or restore focus into.
+      // Let the full render consume the latest controller state first.
+      if (!(contentMount instanceof HTMLElement)) {
         this.requestRender();
         return;
       }
@@ -96,10 +100,7 @@ export function createLibraryScreenMethods03() {
             </div>
           `;
       } else {
-        const contentMount = this.container.querySelector("#libraryContentAreaMount");
-        if (contentMount instanceof HTMLElement) {
-          contentMount.outerHTML = this.renderLibraryContentArea(state);
-        }
+        contentMount.outerHTML = this.renderLibraryContentArea(state);
       }
 
       this.applyNoCssGridPosterLayout();
@@ -131,6 +132,7 @@ export function createLibraryScreenMethods03() {
       this.restoreFocus();
     },
     renderGrid(items) {
+      items = items.map((item) => customPosterForItem(item, "library"));
       const state = this.controller.getState();
       return `
           <section class="library-grid-wrap">
@@ -149,7 +151,8 @@ export function createLibraryScreenMethods03() {
                            data-backdrop-src="${escapeHtml(item.background || "")}"
                            data-addon-base-url="${escapeHtml(item.addonBaseUrl || "")}"
                            data-focus-key="${escapeHtml(focusKey)}">
-                    <div class="library-grid-poster${item.poster ? "" : " placeholder"}"${item.poster ? ` style="background-image:url('${escapeHtml(item.poster)}')"` : ""}>
+                    <div class="library-grid-poster${item.poster ? "" : " placeholder"}">
+                      ${item.poster ? `<img class="library-grid-poster-image" src="${escapeHtml(item.poster)}"${posterFallbackAttributes(item)} alt="" loading="lazy" decoding="async" />` : ""}
                       ${isWatched ? renderTitleWatchedBadge({ className: "library-watched-badge", iconClassName: "library-watched-badge-svg" }) : ""}
                     </div>
                     <div class="library-grid-title">${escapeHtml(item.name || item.id || "Untitled")}</div>
@@ -163,7 +166,7 @@ export function createLibraryScreenMethods03() {
     },
     renderEmptyState() {
       return `
-          <section class="library-empty-state">
+          <section class="library-empty-state library-empty-state-items">
             ${bookmarkOutlineSvg()}
             <h3 class="library-empty-title">${escapeHtml(this.controller.getEmptyStateTitle())}</h3>
             <p class="library-empty-subtitle">${escapeHtml(this.controller.getEmptyStateSubtitle())}</p>
@@ -197,7 +200,7 @@ export function createLibraryScreenMethods03() {
       return true;
     },
     renderActions(state) {
-      if (state.sourceMode !== "trakt") {
+      if (!["trakt", "mdblist"].includes(state.sourceMode)) {
         return "";
       }
       return `
@@ -224,7 +227,7 @@ export function createLibraryScreenMethods03() {
           <div class="library-overlay">
             <section class="library-dialog library-manage-dialog">
               <div class="library-manage-stack">
-                <h3 class="library-dialog-title library-manage-title">${escapeHtml(t("library_manage_trakt_lists", {}, "Manage Trakt Lists"))}</h3>
+                <h3 class="library-dialog-title library-manage-title">${escapeHtml(state.sourceMode === "mdblist" ? t("library_manage_lists") : t("library_manage_trakt_lists", {}, "Manage Trakt Lists"))}</h3>
                 ${state.errorMessage ? `<p class="library-dialog-error library-manage-error">${escapeHtml(state.errorMessage)}</p>` : ""}
                 <div class="library-manage-list${personalTabs.length ? " has-items" : ""}">
                   ${
@@ -247,8 +250,14 @@ export function createLibraryScreenMethods03() {
                 <div class="library-manage-actions-row">
                   <button class="library-action-button focusable" data-action="createList" ${state.pendingOperation ? "disabled" : ""}>${escapeHtml(t("library_list_create", {}, "Create"))}</button>
                   <button class="library-action-button focusable" data-action="editList" ${state.pendingOperation || !state.manageSelectedListKey ? "disabled" : ""}>${escapeHtml(t("library_list_edit", {}, "Edit"))}</button>
+                  ${
+                    state.sourceMode === "trakt"
+                      ? `
                   <button class="library-action-button focusable" data-action="moveListUp" ${state.pendingOperation || !state.manageSelectedListKey ? "disabled" : ""}>${escapeHtml(t("library_list_move_up", {}, "Move Up"))}</button>
                   <button class="library-action-button focusable" data-action="moveListDown" ${state.pendingOperation || !state.manageSelectedListKey ? "disabled" : ""}>${escapeHtml(t("library_list_move_down", {}, "Move Down"))}</button>
+                  `
+                      : ""
+                  }
                 </div>
                 <div class="library-manage-actions-row">
                   <button class="library-action-button focusable danger" data-action="deleteList" ${state.pendingOperation || !state.manageSelectedListKey ? "disabled" : ""}>${escapeHtml(t("library_list_delete", {}, "Delete"))}</button>
@@ -277,6 +286,9 @@ export function createLibraryScreenMethods03() {
                        ${state.pendingOperation ? "disabled" : ""} />
                 <span class="library-dialog-field-label">${escapeHtml(t("library_list_name_label", {}, "Name"))}</span>
               </label>
+              ${
+                state.sourceMode !== "mdblist"
+                  ? `
               <label class="library-dialog-field library-outlined-field">
                 <textarea class="library-dialog-textarea focusable"
                           data-editor-field="description"
@@ -285,19 +297,24 @@ export function createLibraryScreenMethods03() {
                           ${state.pendingOperation ? "disabled" : ""}>${escapeHtml(editor.description)}</textarea>
                 <span class="library-dialog-field-label">${escapeHtml(t("library_list_description_label", {}, "Description"))}</span>
               </label>
+              `
+                  : ""
+              }
               <div class="library-dialog-field library-privacy-field">
                 <span class="library-privacy-label">${escapeHtml(t("library_list_privacy", {}, "Privacy"))}</span>
                 <div class="library-privacy-row">
-                  ${LIBRARY_PRIVACY_OPTIONS.map(
-                    (privacy) => `
+                  ${LIBRARY_PRIVACY_OPTIONS.filter((privacy) => state.sourceMode !== "mdblist" || ["private", "public"].includes(privacy))
+                    .map(
+                      (privacy) => `
                     <button class="library-privacy-button focusable${privacy === editor.privacy ? " selected" : ""}"
                             data-action="selectPrivacy"
                             data-privacy="${privacy}"
                             ${state.pendingOperation ? "disabled" : ""}>
-                      ${escapeHtml(privacy.charAt(0).toUpperCase() + privacy.slice(1))}
+                      ${escapeHtml(state.sourceMode === "mdblist" ? t(`library_privacy_${privacy}`) : privacy.charAt(0).toUpperCase() + privacy.slice(1))}
                     </button>
                   `
-                  ).join("")}
+                    )
+                    .join("")}
                 </div>
               </div>
               <div class="library-dialog-actions library-editor-actions">
@@ -319,7 +336,7 @@ export function createLibraryScreenMethods03() {
           <div class="library-overlay">
             <section class="library-dialog library-delete-dialog">
               <h3 class="library-dialog-title">${escapeHtml(t("library_delete_title", {}, "Delete this list?"))}</h3>
-              <p class="library-dialog-subtitle">${escapeHtml(t("library_delete_subtitle", {}, "This removes the list and all list items from Trakt."))}</p>
+              <p class="library-dialog-subtitle">${escapeHtml(state.sourceMode === "mdblist" ? `MDBList · ${state.listTabs.find((tab) => tab.key === state.manageSelectedListKey)?.title || ""}` : t("library_delete_subtitle", {}, "This removes the list and all list items from Trakt."))}</p>
               <div class="library-dialog-actions library-delete-actions">
                 <button class="library-action-button focusable danger"
                         data-action="confirmDeleteList"

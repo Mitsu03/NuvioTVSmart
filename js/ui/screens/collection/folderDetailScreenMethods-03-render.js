@@ -1,3 +1,4 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./folderDetailScreen.js";
 
@@ -37,7 +38,7 @@ export function createFolderDetailScreenMethods03() {
       const sourceRows = this.viewMode === "TABBED_GRID" ? this.sourceTabs || [] : this.tabs.filter((tab) => !tab.isAllTab);
       const heroDisplay = buildHeroDisplay(this.heroItem) || buildHeroDisplay(buildFolderHeroSeed(this.folder));
       const selectedTab = this.getSelectedTab();
-      const items = selectedTab?.items || [];
+      const items = (selectedTab?.items || []).map((item) => customPosterForItem(item, "collections"));
       const cards = items.length
         ? items
             .map(
@@ -58,7 +59,7 @@ export function createFolderDetailScreenMethods03() {
                 <div class="seeall-card-poster-wrap">
                   ${
                     item.poster
-                      ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="${folderPosterLoadingMode()}" decoding="async" />`
+                      ? `<img class="seeall-card-poster-image" ${posterFallbackAttributes(item)} src="${escapeHtml(item.poster)}" alt="" loading="${folderPosterLoadingMode()}" decoding="async" />`
                       : `<div class="seeall-card-poster placeholder"></div>`
                   }
                   ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
@@ -82,6 +83,7 @@ export function createFolderDetailScreenMethods03() {
           const mediaTypeLabel = sourceType(tab.source || {}) === "series" ? "Series" : "Movie";
           const rowTitle = tab.label !== mediaTypeLabel ? `${tab.label} - ${mediaTypeLabel}` : tab.label;
           const rowCards = (tab.items || [])
+            .map((item) => customPosterForItem(item, "collections"))
             .map(
               (item, itemIndex) => `
             <article class="seeall-card focusable"
@@ -103,7 +105,7 @@ export function createFolderDetailScreenMethods03() {
               <div class="seeall-card-poster-wrap">
                 ${
                   item.poster
-                    ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="${folderPosterLoadingMode()}" decoding="async" />`
+                    ? `<img class="seeall-card-poster-image" ${posterFallbackAttributes(item)} src="${escapeHtml(item.poster)}" alt="" loading="${folderPosterLoadingMode()}" decoding="async" />`
                     : `<div class="seeall-card-poster placeholder"></div>`
                 }
                 ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}

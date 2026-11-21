@@ -1,5 +1,28 @@
 const OUTRO_SEGMENT_TYPES = new Set(["outro", "ed", "mixed-ed"]);
 
+export function segmentCategory(type) {
+  switch (
+    String(type || "")
+      .trim()
+      .toLowerCase()
+  ) {
+    case "intro":
+    case "op":
+    case "mixed-op":
+      return "opening";
+    case "outro":
+    case "ed":
+    case "mixed-ed":
+    case "credits":
+    case "ending":
+      return "ending";
+    case "recap":
+      return "recap";
+    default:
+      return null;
+  }
+}
+
 export const POST_OUTRO_AUTOPLAY_GAP_SECONDS = 5;
 export const END_OF_VIDEO_EPSILON_SECONDS = 1;
 
@@ -81,6 +104,19 @@ export function getSkipIntervalTargetSeconds(interval, intervals = [], durationS
   return Number.isFinite(Number(target)) ? Number(target) : null;
 }
 
+/**
+ * IntroDB reports movie credits as "movie-credits". Container chapters such as "End Credits"
+ * arrive as outro types; those only count in the second half, so an opening "Credits"
+ * chapter is not taken for the end credits (Android isMovieEndCredits).
+ */
+function isMovieEndCredits(interval, durationSeconds) {
+  const type = normalizedType(interval);
+  if (type === "movie-credits") {
+    return true;
+  }
+  return OUTRO_SEGMENT_TYPES.has(type) && Number(interval.startTime) >= durationSeconds / 2;
+}
+
 function normalizeMovieThreshold(value) {
   const threshold = Number(value);
   return Number.isFinite(threshold) ? Math.max(80, Math.min(100, threshold)) : 90;
@@ -114,7 +150,7 @@ export function moviePostPlayTriggerSeconds({
   );
   const credits = validIntervals.filter(
     (interval) =>
-      normalizedType(interval) === "movie-credits" &&
+      isMovieEndCredits(interval, duration) &&
       Number(interval.endTime) <= duration + END_OF_VIDEO_EPSILON_SECONDS
   );
   const firstCreditsStart = credits.length

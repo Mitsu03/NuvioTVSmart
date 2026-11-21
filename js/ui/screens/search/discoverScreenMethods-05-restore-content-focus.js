@@ -15,6 +15,8 @@ export function createDiscoverScreenMethods05() {
     setLegacySidebarExpanded,
     DISCOVER_POSTER_PREFETCH_MARGIN_PX,
     formatAddonTypeLabel,
+    formatGenreLabel,
+    t,
     escapeHtml,
     scrollNodeIntoContainerView
   } = internals;
@@ -138,20 +140,28 @@ export function createDiscoverScreenMethods05() {
     renderPickerRowMarkup() {
       const selectedCatalog = this.getSelectedCatalog();
       return [
-        this.renderFilterPicker("type", "Type", formatAddonTypeLabel(this.selectedType)),
-        this.renderFilterPicker("catalog", "Catalog", selectedCatalog?.catalogName || "Select"),
-        this.renderFilterPicker("genre", "Genre", this.selectedGenre || "Default")
+        this.renderFilterPicker("type", t("discover_filter_type", {}, "Type"), formatAddonTypeLabel(this.selectedType)),
+        this.renderFilterPicker(
+          "catalog",
+          t("discover_filter_catalog", {}, "Catalog"),
+          selectedCatalog?.catalogName || t("discover_select_catalog", {}, "Select")
+        ),
+        this.renderFilterPicker("genre", t("discover_filter_genre", {}, "Genre"), formatGenreLabel(this.selectedGenre || "Default"))
       ].join("");
     },
     renderPickerMarkup(kind) {
       if (kind === "type") {
-        return this.renderFilterPicker("type", "Type", formatAddonTypeLabel(this.selectedType));
+        return this.renderFilterPicker("type", t("discover_filter_type", {}, "Type"), formatAddonTypeLabel(this.selectedType));
       }
       if (kind === "catalog") {
-        return this.renderFilterPicker("catalog", "Catalog", this.getSelectedCatalog()?.catalogName || "Select");
+        return this.renderFilterPicker(
+          "catalog",
+          t("discover_filter_catalog", {}, "Catalog"),
+          this.getSelectedCatalog()?.catalogName || t("discover_select_catalog", {}, "Select")
+        );
       }
       if (kind === "genre") {
-        return this.renderFilterPicker("genre", "Genre", this.selectedGenre || "Default");
+        return this.renderFilterPicker("genre", t("discover_filter_genre", {}, "Genre"), formatGenreLabel(this.selectedGenre || "Default"));
       }
       return "";
     },
@@ -219,6 +229,7 @@ export function createDiscoverScreenMethods05() {
       const enterClass = ScreenUtils.routeEnterClass(this, this.discoverRouteEnterPending, " nuvio-route-slide-enter");
       this.discoverRouteEnterPending = false;
 
+      const loadedPosters = this.captureLoadedDiscoverPosters();
       this.container.innerHTML = `
           <div class="home-shell search-screen-shell discover-shell${showRootSidebar ? " discover-root-route" : ""}">
             ${
@@ -250,6 +261,7 @@ export function createDiscoverScreenMethods05() {
           </div>
         `;
 
+      this.restoreLoadedDiscoverPosters(loadedPosters);
       ScreenUtils.indexFocusables(this.container);
       this.buildNavigationModel();
       if (showRootSidebar) {
@@ -284,6 +296,35 @@ export function createDiscoverScreenMethods05() {
         this.restoreContentFocus({ scrollMode });
       }
       this.syncOpenPickerScroll();
+    },
+    captureLoadedDiscoverPosters() {
+      // Keep decoded image nodes across grid/shell rebuilds. A new data-src
+      // image otherwise blanks an already visible poster until hydration.
+      const posters = new Map();
+      this.container?.querySelectorAll(".discover-card .seeall-card-poster-image").forEach((image) => {
+        if (!(image instanceof HTMLImageElement) || !image.complete || image.naturalWidth <= 0) {
+          return;
+        }
+        const card = image.closest(".discover-card");
+        const src = image.getAttribute("src");
+        if (src) {
+          const key = JSON.stringify([card.dataset.itemType, card.dataset.itemId, src]);
+          posters.set(key, image);
+        }
+      });
+      return posters;
+    },
+    restoreLoadedDiscoverPosters(posters) {
+      this.container?.querySelectorAll(".discover-card .seeall-card-poster-image[data-src]").forEach((image) => {
+        const card = image.closest(".discover-card");
+        const key = JSON.stringify([card.dataset.itemType, card.dataset.itemId, image.dataset.src]);
+        const loadedImage = posters.get(key);
+        if (loadedImage) {
+          loadedImage.alt = image.alt;
+          image.parentNode.replaceChild(loadedImage, image);
+          posters.delete(key);
+        }
+      });
     },
     scheduleDiscoverPosterHydration() {
       if (!this.container || this.discoverPosterHydrationRaf) {

@@ -1,3 +1,4 @@
+import { MdbListSettingsStore } from "../../../data/local/mdbListSettingsStore.js";
 import * as internals from "./homeScreenContext.js";
 
 export function createHomeScreenMethods11() {
@@ -63,7 +64,13 @@ export function createHomeScreenMethods11() {
         this.applyHeroToDom();
         return true;
       };
-      const mdbImdbRatingPromise = withTimeout(mdbListRepository.getImdbRatingForItem(itemId, itemType), 3500, null).catch(() => null);
+      const mdbImdbRatingPromise = withTimeout(
+        MdbListSettingsStore.get().showOnHero
+          ? mdbListRepository.getRatingsForMeta(hero, itemId, itemType).then((result) => result?.ratings?.imdb ?? null)
+          : mdbListRepository.getImdbRatingForItem(itemId, itemType),
+        3500,
+        null
+      ).catch(() => null);
       let metadataPromise = null;
       let latestMetadataResult = null;
       let latestTmdbEnrichment = null;

@@ -1,3 +1,4 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
 /* eslint-disable no-unused-vars */
 import { Router } from "../../navigation/routerState.js";
 
@@ -239,6 +240,7 @@ export function renderHeroMarkup(layoutMode, heroItem, heroCandidates) {
           <div class="home-hero-meta-primary${display.metaPrimary.length ? "" : " is-empty"}">${renderMetaTokens(display.metaPrimary)}</div>
           <div class="home-hero-chip-row${display.chips.length ? "" : " is-empty"}">${display.chips.map((chip) => `<span class="home-hero-chip">${escapeHtml(chip)}</span>`).join("")}</div>
           <div class="home-hero-meta-secondary${display.metaSecondary.length ? "" : " is-empty"}">${renderMetaTokens(display.metaSecondary)}</div>
+          <div class="home-hero-mdb-ratings${display.mdbListMarkup ? "" : " is-empty"}">${display.mdbListMarkup || ""}</div>
           <p class="home-hero-description">${escapeHtml(display.description)}</p>
         </div>
         <div class="home-hero-indicators">${buildHeroIndicators(heroCandidates, heroItem)}</div>
@@ -271,14 +273,14 @@ export function renderRowHeader(title, subtitle = "") {
 }
 
 export function resolveContinueWatchingBlurNextUp(layoutPrefs) {
-  if (Platform.isTizen()) {
-    return false;
-  }
   return Boolean(layoutPrefs?.blurContinueWatchingNextUp);
 }
 
 export function renderContinueWatchingCard(item, index, options = {}) {
-  const normalized = normalizeContinueWatchingItem(item);
+  const originalItem = normalizeContinueWatchingItem(item);
+  // Row renderers pass the preferences they already read; a lone card still
+  // falls back to a fresh read so direct callers keep their behaviour.
+  const normalized = customPosterForItem(originalItem, "continue_watching", "poster", options?.posterSettings || LayoutPreferences.get());
   const subtitle = normalized.episodeTitle || "";
   const isNextUp = Boolean(normalized?.isNextUp);
   const hasAired = normalized?.hasAired !== false;
@@ -304,6 +306,24 @@ export function renderContinueWatchingCard(item, index, options = {}) {
       hasAired
     }
   );
+  const originalCardImages =
+    normalized === originalItem
+      ? []
+      : continueWatchingImageSources(
+          {
+            poster: originalItem.poster,
+            backdrop: originalItem.backdrop,
+            thumbnail: originalItem.thumbnail,
+            episodeThumbnail: originalItem.episodeThumbnail
+          },
+          {
+            cardStyle,
+            useEpisodeThumbnails: options?.useEpisodeThumbnails,
+            isSeries: isSeriesTypeForContinueWatching(normalized.type),
+            isNextUp,
+            hasAired
+          }
+        );
   const normalizeCardImageUrl = cardStyle === "card" ? normalizeTmdbBackdropUrl : normalizeTmdbPosterUrl;
   const uniqueCardImageSources = uniqueNonEmptyValues(cardImageSources.map((source) => normalizeCardImageUrl(source)));
   const cardImage = uniqueCardImageSources[0] || "";
@@ -326,7 +346,7 @@ export function renderContinueWatchingCard(item, index, options = {}) {
              data-item-type="${escapeAttribute(normalized.type || "movie")}"
              data-item-title="${escapeAttribute(normalized.title || "Untitled")}">
       <div class="home-continue-media">
-        ${cardImage ? `<img class="home-continue-bg" ${continueImageAttrs}${fallbackQueue ? ` data-fallback-srcs="${escapeAttribute(fallbackQueue)}"` : ""} alt="" aria-hidden="true" decoding="async" onerror="${buildImageFallbackErrorHandler()}" />` : ""}
+        ${cardImage ? `<img class="home-continue-bg"${posterFallbackAttributes({ rawPosterUrl: originalCardImages[0] })} ${continueImageAttrs}${fallbackQueue ? ` data-fallback-srcs="${escapeAttribute(fallbackQueue)}"` : ""} alt="" aria-hidden="true" decoding="async" onerror="${buildImageFallbackErrorHandler()}" />` : ""}
         <span class="home-continue-badge">${escapeHtml(normalized.progressStatus || t("home.continueStatusContinue", {}, "Continue"))}</span>
         <div class="home-continue-copy">
           ${normalized.episodeCode ? `<div class="home-continue-kicker">${escapeHtml(normalized.episodeCode)}</div>` : ""}
@@ -378,13 +398,16 @@ export function renderContinueWatchingSection(items = [], options = {}) {
   const loadingCount = Math.max(1, Math.min(10, Number(options?.loadingCount || items.length || 3)));
   const itemLimit = Math.max(1, Number(options?.itemLimit || items.length || 1));
   const cardStyle = ["card", "wide", "poster"].includes(String(options?.cardStyle || "card")) ? String(options.cardStyle) : "card";
+  const renderedItems = getContinueWatchingRenderItems(items, itemLimit);
+  // One preference read for the whole section instead of one per card.
+  const posterSettings = options?.posterSettings || (renderedItems.length ? LayoutPreferences.get() : null);
   const cardOptions = {
     useEpisodeThumbnails: options?.useEpisodeThumbnails,
     blurNextUp: options?.blurNextUp,
     cardStyle,
-    rowKey
+    rowKey,
+    posterSettings
   };
-  const renderedItems = getContinueWatchingRenderItems(items, itemLimit);
   return `
     <section class="home-row home-row-continue home-row-continue-${cardStyle}"${rowKey ? ` data-row-key="${escapeAttribute(rowKey)}"` : ""}>
       <div class="home-row-head">

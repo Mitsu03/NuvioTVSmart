@@ -93,6 +93,22 @@ export function createPluginsScreenMethods04() {
         return;
       }
       const code = Number(event?.keyCode || 0);
+      const nativeCode = Number(event?.originalKeyCode || code);
+      if (Platform.isTizen() && [65376, 65385].includes(nativeCode)) {
+        const input = document.activeElement;
+        if (this.container?.contains?.(input) && input?.matches?.("input[data-action='repository-input']")) {
+          // Tizen leaves the editor focused after IME Done/Cancel. End editing
+          // before returning to the D-pad graph, as Android does on IME Done.
+          this.addDraft = String(input.value || "");
+          input.blur();
+          this.focusKey = "add:submit";
+          this.applyFocus();
+          if (nativeCode === 65376 && this.addDraft.trim() && !this.busy) {
+            await this.addRepository();
+          }
+          return;
+        }
+      }
       if (this.isNativeTextInputEditingActive(event) && [38, 40, 37, 39].includes(code)) {
         // Tizen/webOS route the directional keys through the native TV keyboard
         // while an input is being edited. Do not let the page-level focus graph

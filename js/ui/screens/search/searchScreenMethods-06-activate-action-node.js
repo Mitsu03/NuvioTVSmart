@@ -183,6 +183,9 @@ export function createSearchScreenMethods06() {
 
       if (Platform.isBackEvent(event)) {
         event.preventDefault?.();
+        if (this.focusZone !== "sidebar" && this.stepBackWithinSearch(currentFocusedNode)) {
+          return;
+        }
         if (this.focusZone === "sidebar") {
           Platform.exitApp();
         } else {
@@ -191,6 +194,29 @@ export function createSearchScreenMethods06() {
         return;
       }
 
+      const nativeCode = Number(event?.originalKeyCode || code);
+      if (Platform.isTizen() && (nativeCode === 65376 || nativeCode === 65385)) {
+        const input = this.container?.querySelector("#searchInput");
+        if (input && this.isSearchInputEditingActive(event)) {
+          // Samsung's IME reports its Done/Cancel keys instead of the remote
+          // Enter/Back. End the editing session before returning to the D-pad
+          // graph, as Android does on IME Done, so the keyboard cannot keep
+          // swallowing the next Back press.
+          this.imeDismissed = true;
+          if (nativeCode === 65376) {
+            this.cancelScheduledInputSearch();
+            await this.runSearchFromInput(input, { autoFocusResults: true, rememberToHistory: true });
+          } else {
+            input.blur?.();
+          }
+          return;
+        }
+      }
+
+      // Android lifts the Back-to-field latch once the user navigates, types or submits.
+      if ((code >= 37 && code <= 40) || code === 13) {
+        this.searchBackToFieldLatched = false;
+      }
       if (this.keepSearchInputEditingKey(event, code)) {
         return;
       }
@@ -296,6 +322,36 @@ export function createSearchScreenMethods06() {
       if (this.completePendingPosterHold(current, event)) {
         event?.preventDefault?.();
       }
+    },
+    /**
+     * Android SearchScreen BackHandler: Back from a result past the first goes to the
+     * row's first result; from the first result or the recent searches it returns to the
+     * last-used search input. Only the next Back reaches the sidebar.
+     */
+    stepBackWithinSearch(current) {
+      const zone = String(current?.dataset?.navZone || "");
+      if (this.searchBackToFieldLatched || (zone !== "results" && zone !== "recent-clear")) {
+        return false;
+      }
+      const inRecent = zone === "recent-clear" || Boolean(current.closest?.(".search-recent-item"));
+      if (!inRecent && Number(current.dataset.navCol) > 0) {
+        const first = this.navModel?.rows?.[Number(current.dataset.navRow)]?.[0];
+        if (first) {
+          this.focusNode(current, first);
+          return true;
+        }
+      }
+      const input = this.getLastSearchInputNode();
+      if (!input) {
+        return false;
+      }
+      this.searchBackToFieldLatched = true;
+      const content = this.container?.querySelector(".search-content");
+      if (content) {
+        content.scrollTop = 0;
+      }
+      this.focusNode(current, input);
+      return true;
     },
     consumeBackRequest() {
       return this.closePosterOptionsMenu();

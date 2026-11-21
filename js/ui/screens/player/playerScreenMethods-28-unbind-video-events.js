@@ -1,8 +1,10 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
+import { PartyRepository } from "../../../core/party/partyRepository.js";
+
 export function createPlayerScreenMethods28() {
-  const { t, clamp, escapeHtml } = internals;
+  const { PlayerController, t, clamp, escapeHtml } = internals;
 
   return {
     unbindVideoEvents() {
@@ -11,15 +13,24 @@ export function createPlayerScreenMethods28() {
       });
       this.videoListeners = [];
     },
+    getPlaybackControlPaused() {
+      const conversion = PlayerController.webOsDtsAudioState;
+      // Native decoder pauses during a track reload are not user commands.
+      if (conversion && (conversion.preparing || conversion.cancelReload || conversion.buffering)) {
+        return conversion.controlPaused;
+      }
+      return this.paused;
+    },
     getControlDefinitions() {
+      const paused = this.getPlaybackControlPaused();
       const uiState = this.getPlayerUiState();
       const nextEpisode = this.resolveNextEpisodeInfo();
       const base = [
         {
           action: "playPause",
-          label: this.paused ? ">" : "II",
-          icon: this.paused ? "assets/icons/ic_player_play.svg" : "assets/icons/ic_player_pause.svg",
-          title: "Play/Pause",
+          label: paused ? ">" : "II",
+          icon: paused ? "assets/icons/ic_player_play.svg" : "assets/icons/ic_player_pause.svg",
+          title: paused ? t("cd_play", {}, "Play") : t("cd_pause", {}, "Pause"),
           primary: true
         }
       ];
@@ -33,21 +44,31 @@ export function createPlayerScreenMethods28() {
         });
       }
 
-      base.push({
-        action: "subtitleDialog",
-        icon: "assets/icons/ic_player_subtitles.svg",
-        title: t("subtitle_dialog_title", {}, "Subtitles")
-      });
+      if (this.hasSubtitleTracksAvailable())
+        base.push({
+          action: "subtitleDialog",
+          icon: "assets/icons/ic_player_subtitles.svg",
+          title: t("subtitle_dialog_title", {}, "Subtitles")
+        });
 
-      base.push({
-        action: "audioTrack",
-        icon:
-          this.selectedAudioTrackIndex >= 0 || this.selectedManifestAudioTrackId
-            ? "assets/icons/ic_player_audio_filled.svg"
-            : "assets/icons/ic_player_audio_outline.svg",
-        useMask: true,
-        title: t("audio_dialog_title", {}, "Audio")
-      });
+      if (this.hasAudioTracksAvailable())
+        base.push({
+          action: "audioTrack",
+          icon:
+            this.selectedAudioTrackIndex >= 0 || this.selectedManifestAudioTrackId
+              ? "assets/icons/ic_player_audio_filled.svg"
+              : "assets/icons/ic_player_audio_outline.svg",
+          useMask: true,
+          title: t("audio_dialog_title", {}, "Audio")
+        });
+
+      if (Array.isArray(this.playerChapters) && this.playerChapters.length > 1 && this.isLivePlayback?.() !== true) {
+        base.push({
+          action: "chapters",
+          icon: "assets/icons/ic_player_chapters.svg",
+          title: t("player_chapters", {}, "Chapters")
+        });
+      }
 
       base.push({
         action: "source",
@@ -60,6 +81,16 @@ export function createPlayerScreenMethods28() {
           action: "episodes",
           icon: "assets/icons/ic_player_episodes.svg",
           title: t("episodes_panel_title", {}, "Episodes")
+        });
+      }
+
+      if (this.isPartyButtonAvailable?.()) {
+        base.push({
+          action: "party",
+          icon: "assets/icons/ic_player_party.svg",
+          useMask: true,
+          title: t("party_title", {}, "Watch party"),
+          className: PartyRepository.getState().party ? "is-party-active" : ""
         });
       }
 
@@ -91,6 +122,7 @@ export function createPlayerScreenMethods28() {
           icon: "assets/icons/ic_player_aspect_ratio.svg",
           title: t("player_more_aspect_ratio", {}, "Aspect Ratio")
         },
+        { action: "streamInfo", label: "ⓘ", title: t("cd_stream_info", {}, "Stream info") },
         { action: "backFromMore", label: "<", title: t("player_go_back", {}, "Back") }
       ];
     },
@@ -102,7 +134,8 @@ export function createPlayerScreenMethods28() {
           control.icon || "",
           control.title || "",
           Boolean(control.primary),
-          Boolean(control.useMask)
+          Boolean(control.useMask),
+          control.className || ""
         ])
       );
     },
@@ -129,23 +162,29 @@ export function createPlayerScreenMethods28() {
       }
       this.controlFocusIndex = clamp(this.controlFocusIndex, 0, Math.max(0, controls.length - 1));
 
-      wrap.innerHTML = controls
-        .map(
-          (control) => `
-          <button class="player-control-btn focusable${control.primary ? " is-primary" : ""}"
-                  data-action="${control.action}"
-                  title="${escapeHtml(control.title || "")}">
-            ${
-              control.icon
-                ? control.primary || control.useMask
-                  ? `<span class="player-control-icon player-control-icon-mask" style="-webkit-mask-image:url('${escapeHtml(control.icon)}');mask-image:url('${escapeHtml(control.icon)}');" aria-hidden="true"></span>`
-                  : `<img class="player-control-icon" src="${control.icon}" alt="" aria-hidden="true" />`
-                : `<span class="player-control-label">${escapeHtml(control.label || "")}</span>`
-            }
-          </button>
-        `
-        )
-        .join("");
+      const mountedButtons = Array.from(wrap.querySelectorAll(".player-control-btn"));
+      const controlsMatchDom =
+        mountedButtons.length === controls.length &&
+        mountedButtons.every((button, index) => button.dataset.action === String(controls[index]?.action || ""));
+      if (!controlsMatchDom || this.renderedControlSignature !== controlRenderSignature) {
+        wrap.innerHTML = controls
+          .map(
+            (control) => `
+            <button class="player-control-btn focusable${control.primary ? " is-primary" : ""}${control.className ? ` ${escapeHtml(control.className)}` : ""}"
+                    data-action="${control.action}"
+                    title="${escapeHtml(control.title || "")}">
+              ${
+                control.icon
+                  ? control.primary || control.useMask
+                    ? `<span class="player-control-icon player-control-icon-mask" style="-webkit-mask-image:url('${escapeHtml(control.icon)}');mask-image:url('${escapeHtml(control.icon)}');" aria-hidden="true"></span>`
+                    : `<img class="player-control-icon" src="${control.icon}" alt="" aria-hidden="true" />`
+                  : `<span class="player-control-label">${escapeHtml(control.label || "")}</span>`
+              }
+            </button>
+          `
+          )
+          .join("");
+      }
       this.renderedControlSignature = controlRenderSignature;
 
       const buttons = Array.from(wrap.querySelectorAll(".player-control-btn"));
@@ -256,8 +295,10 @@ export function createPlayerScreenMethods28() {
         this.subtitleDelayOverlayVisible ||
         this.audioDialogVisible ||
         this.sourcesPanelVisible ||
+        this.chaptersPanelVisible ||
         this.episodePanelVisible ||
-        this.speedDialogVisible
+        this.speedDialogVisible ||
+        Boolean(this.partyPanelVisible)
       );
     },
     syncPlayerOverlayLayoutState() {
@@ -280,6 +321,7 @@ export function createPlayerScreenMethods28() {
       this.container?.classList.toggle("post-play-trailer-consumed", postPlayTrailerConsumed);
       this.container?.classList.toggle("post-play-returning", Boolean(postPlayState.hasReturnedToPlayer));
       this.syncPostPlayPlayerSurface(postPlayState);
+      this.setPostPlaySubtitleOutputHidden(postPlayVisible);
       this.syncPlayerActionOverlayOffset();
     },
     cancelPostPlayPlayerSurfaceAnimation() {

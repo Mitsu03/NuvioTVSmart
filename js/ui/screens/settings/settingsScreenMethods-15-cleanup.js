@@ -1,3 +1,4 @@
+import { stopMdbListAuthorization } from "./settingsMdbListAccount.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./settingsScreenContext.js";
 
@@ -6,6 +7,13 @@ export function createSettingsScreenMethods15() {
 
   return {
     cleanup() {
+      stopMdbListAuthorization.call(this);
+      this.closeCustomPosterPhoneConfig?.();
+      this.closeCustomPosterPhoneConfig = null;
+      this.mediaServerDraft = null;
+      this.mediaServersView = null;
+      this.mediaServerError = null;
+      this.stopTrackingWork?.();
       this.isMounted = false;
       this.settingsMountToken = (this.settingsMountToken || 0) + 1;
       this.memberAccessUnsubscribe?.();
@@ -26,6 +34,10 @@ export function createSettingsScreenMethods15() {
       if (navSlot?.settingsScrollAnimationFrame) {
         cancelAnimationFrame(navSlot.settingsScrollAnimationFrame);
         navSlot.settingsScrollAnimationFrame = null;
+      }
+      if (navSlot?.settingsScrollAnimationFrameX) {
+        cancelAnimationFrame(navSlot.settingsScrollAnimationFrameX);
+        navSlot.settingsScrollAnimationFrameX = null;
       }
       this.handleWheelBound = null;
       this.handleClickBound = null;

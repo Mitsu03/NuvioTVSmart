@@ -1,5 +1,10 @@
+import { createStreamRedirectReporter } from "./streamRedirect.js";
+import { applyAdaptiveRequestHeaders } from "./adaptiveRequestHeaders.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerController.js";
+
+const HLS_MAX_NETWORK_RECOVERY_ATTEMPTS = 2;
+const HLS_NETWORK_RECOVERY_DELAY_MS = 1500;
 
 export function createPlayerControllerMethods13() {
   const {
@@ -42,6 +47,17 @@ export function createPlayerControllerMethods13() {
         maxMaxBufferLength: HLS_MAX_BUFFER_SECONDS,
         maxBufferHole: 0.5,
         startFragPrefetch: false,
+        // Android PlayerLoadErrorHandlingPolicy (DefaultLoadErrorHandlingPolicy(6)) keeps
+        // retrying playlist 5xx for ~15s while buffered media plays. hls.js shares one
+        // playlist error counter across video and audio playlists, hence 12 retries.
+        playlistLoadPolicy: {
+          default: {
+            maxTimeToFirstByteMs: 10000,
+            maxLoadTimeMs: 20000,
+            timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 },
+            errorRetry: { maxNumRetry: 12, retryDelayMs: 1000, maxRetryDelayMs: 5000 }
+          }
+        },
         xhrSetup: (xhr) => {
           Object.entries(forwardedHeaders).forEach(([headerName, headerValue]) => {
             try {
@@ -118,17 +134,22 @@ export function createPlayerControllerMethods13() {
             emitFatalHlsNetworkError(data, responseCode);
             return;
           }
-          if (networkRecoveryAttempts >= 1) {
+          // Android attemptAutoRetry: two retries 1.5s apart before surfacing the error.
+          if (networkRecoveryAttempts >= HLS_MAX_NETWORK_RECOVERY_ATTEMPTS) {
             emitFatalHlsNetworkError(data, responseCode);
             return;
           }
-          try {
-            networkRecoveryAttempts += 1;
-            hls.startLoad();
-            return;
-          } catch (_) {
-            // Fall through and destroy on unrecoverable load errors.
-          }
+          networkRecoveryAttempts += 1;
+          setTimeout(() => {
+            if (this.hlsInstance !== hls || !this.isPlaybackRequestActive(playToken, url)) return;
+            try {
+              hls.stopLoad();
+              hls.startLoad();
+            } catch (_) {
+              emitFatalHlsNetworkError(data, responseCode);
+            }
+          }, HLS_NETWORK_RECOVERY_DELAY_MS);
+          return;
         }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
           if (mediaRecoveryAttempts >= 1) {
@@ -160,6 +181,11 @@ export function createPlayerControllerMethods13() {
         });
       });
 
+      // Android resets its retry budget once playback progresses again.
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        networkRecoveryAttempts = 0;
+      });
+
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
         if (!this.isPlaybackRequestActive(playToken, url)) {
           return;
@@ -176,6 +202,11 @@ export function createPlayerControllerMethods13() {
             hlsErrorDetails: String(error?.message || error || "")
           });
         }
+      });
+
+      const reportRedirect = createStreamRedirectReporter(this, url, playToken);
+      hls.on(Hls.Events.MANIFEST_LOADED, (_, data = {}) => {
+        reportRedirect(data.networkDetails?.responseURL || data.networkDetails?.url);
       });
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -231,7 +262,7 @@ export function createPlayerControllerMethods13() {
       hls.attachMedia(this.video);
       return true;
     },
-    playWithDashJs(url, playToken = null) {
+    playWithDashJs(url, playToken = null, requestHeaders = this.currentPlaybackHeaders || {}) {
       if (!this.video || !this.canUseDashJs()) {
         return false;
       }
@@ -264,6 +295,17 @@ export function createPlayerControllerMethods13() {
               enabled: false
             }
           }
+        });
+        const forwardedHeaders = this.normalizePlaybackHeaders(requestHeaders);
+        if (Object.keys(forwardedHeaders).length || String(url).includes("/proxy/")) {
+          player.addRequestInterceptor((request) => applyAdaptiveRequestHeaders(request, forwardedHeaders, url));
+        }
+        const reportRedirect = createStreamRedirectReporter(this, url, playToken);
+        player.addResponseInterceptor((response) => {
+          if (response.request?.url === url && response.status >= 200 && response.status < 300) {
+            reportRedirect(response.url);
+          }
+          return Promise.resolve(response);
         });
         player.initialize(this.video, url, true);
         const dashEvents = dashJsEngine.getEvents();

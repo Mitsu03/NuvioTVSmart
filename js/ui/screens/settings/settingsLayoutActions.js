@@ -1,5 +1,6 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./settingsScreenContext.js";
+import { HomeCatalogSettingsSyncService } from "../../../core/profile/homeCatalogSettingsSyncService.js";
 
 export function registerLayoutActions(model) {
   const { HomeCatalogStore, LayoutPreferences, HOME_LAYOUT_OPTIONS, t } = internals;
@@ -21,7 +22,9 @@ export function registerLayoutActions(model) {
   this.actionMap.set("layout:toggle:cardAppearance", () => {
     this.toggleExpandedSection("layout", "cardAppearance");
   });
-
+  this.actionMap.set("layout:toggle:customPosters", () => {
+    this.toggleExpandedSection("layout", "customPosters");
+  });
   HOME_LAYOUT_OPTIONS.forEach((option) => {
     this.actionMap.set(`layout:layout:${option.id}`, () => {
       LayoutPreferences.set({ homeLayout: option.id });
@@ -40,16 +43,22 @@ export function registerLayoutActions(model) {
   this.actionMap.set("layout:heroSection", () => {
     LayoutPreferences.set({ heroSectionEnabled: !LayoutPreferences.get().heroSectionEnabled });
   });
+  this.actionMap.set("layout:heroDescriptionAutoScroll", () => {
+    LayoutPreferences.set({
+      heroDescriptionAutoScrollEnabled: !LayoutPreferences.get().heroDescriptionAutoScrollEnabled
+    });
+  });
   this.actionMap.set("layout:heroCatalogs", () => {
     const catalogSettings = model.homeCatalog || HomeCatalogStore.get();
     const options = (catalogSettings.order || [])
+      .filter((key, index, array) => array.indexOf(key) === index)
       .filter((key) => !catalogSettings.disabled?.includes(key))
       .map((key) => ({
         id: key,
         label: catalogSettings.customTitles?.[key] || key.split("::").pop() || key
       }));
     this.openMultiChoiceDialog({
-      title: t("layout_hero_catalog", {}, "Hero catalogs"),
+      title: t("layout_hero_catalogs", {}, "Hero Catalogs"),
       options,
       selectedIds: model.layout.heroCatalogKeys || [],
       returnFocusKey: "layout:heroCatalogs",
@@ -129,6 +138,9 @@ export function registerLayoutActions(model) {
     LayoutPreferences.set({
       hideUnreleasedContent: !LayoutPreferences.get().hideUnreleasedContent
     });
+    // Android pushes this home-catalog setting immediately, so a later pull
+    // cannot restore the previous value.
+    HomeCatalogSettingsSyncService.triggerPush();
   });
   this.actionMap.set("layout:useEpisodeThumbnailsInCw", () => {
     LayoutPreferences.set({
@@ -147,6 +159,42 @@ export function registerLayoutActions(model) {
   });
   this.actionMap.set("layout:showUnairedNextUp", () => {
     LayoutPreferences.set({ showUnairedNextUp: !LayoutPreferences.get().showUnairedNextUp });
+  });
+  this.actionMap.set("layout:continueWatchingClickAction", () => {
+    const options = [
+      {
+        id: "STREAM",
+        labelKey: "layout_cw_click_stream",
+        label: "Open Stream",
+        description: t("layout_cw_click_stream_desc", {}, "Pick a source or resume playback")
+      },
+      {
+        id: "DETAILS",
+        labelKey: "layout_cw_click_details",
+        label: "Open Details",
+        description: t("layout_cw_click_details_desc", {}, "Open the details page of the title")
+      },
+      {
+        id: "DETAILS_FOR_UPCOMING",
+        labelKey: "layout_cw_click_details_upcoming",
+        label: "Details for Upcoming Only",
+        description: t(
+          "layout_cw_click_details_upcoming_desc",
+          {},
+          "Open details for episodes that have not aired yet, the stream for the rest"
+        )
+      }
+    ];
+    this.openOptionDialog({
+      title: t("layout_cw_click_action", {}, "On Select"),
+      options,
+      selectedId: String(model.layout.continueWatchingClickAction || "STREAM"),
+      returnFocusKey: "layout:continueWatchingClickAction",
+      optionRenderer: "single-choice",
+      onSelect: (option) => {
+        LayoutPreferences.set({ continueWatchingClickAction: String(option.id || "STREAM") });
+      }
+    });
   });
   this.actionMap.set("layout:continueWatchingSortMode", () => {
     const options = [
@@ -198,6 +246,11 @@ export function registerLayoutActions(model) {
   this.actionMap.set("layout:modernLandscapePosters", () => {
     LayoutPreferences.set({
       modernLandscapePostersEnabled: !LayoutPreferences.get().modernLandscapePostersEnabled
+    });
+  });
+  this.actionMap.set("layout:alwaysShowLandscapeClearlogo", () => {
+    LayoutPreferences.set({
+      alwaysShowLandscapeClearlogo: !LayoutPreferences.get().alwaysShowLandscapeClearlogo
     });
   });
   this.actionMap.set("layout:modernHeroFullScreenBackdrop", () => {
@@ -259,6 +312,14 @@ export function registerLayoutActions(model) {
       detailPageTrailerButtonEnabled: !LayoutPreferences.get().detailPageTrailerButtonEnabled
     });
   });
+  this.actionMap.set("layout:detail:trailerBackground", () => {
+    LayoutPreferences.set({
+      trailerPlayInBackground: !LayoutPreferences.get().trailerPlayInBackground
+    });
+  });
+  this.actionMap.set("layout:detail:shuffle", () =>
+    LayoutPreferences.set({ randomEpisodeEnabled: !LayoutPreferences.get().randomEpisodeEnabled })
+  );
   this.actionMap.set("layout:detail:blurUnwatched", () => {
     LayoutPreferences.set({
       blurUnwatchedEpisodes: !LayoutPreferences.get().blurUnwatchedEpisodes

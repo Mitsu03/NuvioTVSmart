@@ -51,6 +51,15 @@ export const StreamPreferencesStore = {
     return entry ? { ...entry } : null;
   },
 
+  getLatestForContent(contentId, profileId = activeProfileId()) {
+    const id = String(contentId || "").trim();
+    if (!id) return null;
+    const entry = readEntries(profileId).find(
+      (item) => item.contentId === id || item.key === id || String(item.key).startsWith(`${id}::`)
+    );
+    return entry ? { ...entry } : null;
+  },
+
   get(contentId, videoId, profileId = activeProfileId()) {
     const entry = this.getEntry(contentId, videoId, profileId);
     return entry ? String(entry.streamId || "") || null : null;
@@ -83,6 +92,9 @@ export const StreamPreferencesStore = {
     // Newest first; drop the oldest entries once the cap is exceeded.
     entries.unshift({
       key,
+      contentId: String(contentId || "").trim(),
+      filename: String(metadata?.filename || "").trim() || null,
+      infoHash: String(metadata?.infoHash || "").trim() || null,
       streamId: sid,
       cachedAtMs: Date.now(),
       bingeGroup: String(metadata?.bingeGroup || "").trim() || null,

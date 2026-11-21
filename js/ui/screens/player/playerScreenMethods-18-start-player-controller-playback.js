@@ -1,3 +1,4 @@
+import { saveReusableStreamLink } from "../../../core/streams/streamLinkReuse.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
@@ -40,6 +41,7 @@ export function createPlayerScreenMethods18() {
         ...(context && typeof context === "object" ? context : {}),
         ...(Object.keys(requestHeaders).length ? { requestHeaders } : {})
       };
+      saveReusableStreamLink(this, sourceCandidate || this.getCurrentStreamCandidate(), { url: playbackUrl, headers: requestHeaders });
       PlayerController.setStartupPresentationAudioMuted?.(true);
       return Promise.resolve(PlayerController.play(playbackUrl, playbackContext)).catch((error) => {
         if (!this.isActiveMountToken(mountToken) || this.isExternalFrameMode()) {
@@ -55,6 +57,7 @@ export function createPlayerScreenMethods18() {
           typeof PlayerController.getLastPlaybackErrorCode === "function" ? Number(PlayerController.getLastPlaybackErrorCode() || 0) : 0;
         const detail = String(error?.message || error?.name || error || "").trim();
         const candidate = sourceCandidate || this.getStreamCandidateByUrl(playbackUrl) || this.getCurrentStreamCandidate();
+        if (this.tryServerPlaybackFallback?.(candidate)) return;
         this.markPlaybackSourceFailed(playbackUrl);
         if (!this.hasPresentedPlaybackFrame) {
           this.showStartupError(this.getStartupErrorMessage(mediaErrorCode, detail, candidate), {
@@ -94,7 +97,7 @@ export function createPlayerScreenMethods18() {
     getStartupErrorMessage(mediaErrorCode = 0, detail = "", streamCandidate = this.getCurrentStreamCandidate()) {
       const code = Number(mediaErrorCode || 0);
       const compatibilityMessage = this.getWebHeaderRestrictedStreamMessage(streamCandidate);
-      if (compatibilityMessage && (code === 0 || code === 2 || code === 4)) {
+      if (compatibilityMessage && (code === 0 || code === 2 || code === 4) && !this.resolvePlaybackHttpStatus(detail)) {
         return compatibilityMessage;
       }
       const baseMessage = this.mediaErrorMessage(code, detail, streamCandidate);
@@ -132,7 +135,7 @@ export function createPlayerScreenMethods18() {
       overlay.innerHTML = `
           <div class="player-startup-error-shell">
             <div class="player-startup-error-title">${escapeHtml(t("player_error_title", {}, "Playback Error"))}</div>
-            <div class="player-startup-error-message">${escapeHtml(message)}</div>
+            <div class="player-startup-error-message" role="status" aria-live="polite">${escapeHtml(message)}</div>
             ${
               detailLines.length
                 ? `

@@ -1,3 +1,4 @@
+import { detailShuffleSettings, selectDetailShuffle, detailShuffleResume } from "./detailEpisodeShuffle.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./metaDetailsScreenContext.js";
 
@@ -33,6 +34,22 @@ export function createMetaDetailsScreenMethods05() {
       return seasons[0] ?? 1;
     },
     computeNextEpisodeToWatch(progress) {
+      if (detailShuffleSettings(this).enabled) {
+        this.shuffleResumeProgress = detailShuffleResume(this, progress);
+        if (this.shuffleResumeProgress) {
+          const resume = this.shuffleResumeProgress;
+          return (
+            this.findEpisodeFromProgress(resume) || {
+              id: resume.videoId,
+              season: resume.season,
+              episode: resume.episode,
+              title: resume.episodeTitle || ""
+            }
+          );
+        }
+        return selectDetailShuffle(this);
+      }
+      this.shuffleResumeProgress = null;
       if (!this.episodes?.length) {
         return null;
       }

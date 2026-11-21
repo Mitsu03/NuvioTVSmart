@@ -23,16 +23,6 @@ export function renderPlaybackGeneralBody(model) {
               checked: Boolean(model.player.autoplayNextEpisode)
             })}
             ${this.renderToggleRow({
-              focusKey: "playback:nextEpisodeCountdown",
-              title: t("next_episode_countdown_title", {}, "Next Episode Countdown"),
-              subtitle: t(
-                "next_episode_countdown_sub",
-                {},
-                "Leave 3 seconds to cancel before switching to the next episode. Turn this off to switch immediately."
-              ),
-              checked: model.player.nextEpisodeCountdownEnabled !== false
-            })}
-            ${this.renderToggleRow({
               focusKey: "playback:postPlayRecommendations",
               title: t("autoplay_post_play_recommendations", {}, "Post-play Recommendations"),
               subtitle: t("autoplay_post_play_recommendations_sub", {}, "Show recommendations near the end of movies and series."),
@@ -80,9 +70,25 @@ export function renderPlaybackGeneralBody(model) {
             })}
             ${this.renderToggleRow({ focusKey: "playback:loadingOverlay", title: t("playback_loading_overlay"), subtitle: t("playback_loading_overlay_sub"), checked: model.player.loadingOverlayEnabled !== false })}
             ${this.renderToggleRow({ focusKey: "playback:loadingStatus", title: t("playback_show_loading_status", {}, "Detailed loading status"), subtitle: t("playback_show_loading_status_sub", {}, "Show detailed player loading progress"), checked: model.player.showPlayerLoadingStatus !== false })}
-            ${Platform.isWebOS() ? this.renderToggleRow({ focusKey: "playback:minimalBufferingUi", title: t("playback_minimal_buffering_ui", {}, "Minimal buffering UI"), subtitle: t("playback_minimal_buffering_ui_sub", {}, "Show only the spinner when playback buffers after it has started"), checked: Boolean(model.player.minimalBufferingUiEnabled) }) : ""}
             ${this.renderToggleRow({ focusKey: "playback:pauseOverlay", title: t("playback_pause_overlay"), subtitle: t("playback_pause_overlay_sub"), checked: model.player.pauseOverlayEnabled !== false })}
             ${this.renderToggleRow({ focusKey: "playback:parentalGuide", title: t("playback_parental_guide"), subtitle: t("playback_parental_guide_sub"), checked: model.player.parentalGuideEnabled !== false })}
+            ${this.renderToggleRow({
+              focusKey: "playback:chapters",
+              title: t("playback_exo_chapters_title", {}, "Show Chapters"),
+              subtitle: t(
+                "playback_exo_chapters_sub",
+                {},
+                "Read the chapters of MKV files to mark them on the progress bar and skip between them."
+              ),
+              checked: model.player.chaptersEnabled === true
+            })}
+            ${this.renderToggleRow({
+              focusKey: "playback:chapterTitle",
+              title: t("playback_chapter_title_title", {}, "Show Chapter Title"),
+              subtitle: t("playback_chapter_title_sub", {}, "Show the name of the current chapter above the progress bar."),
+              checked: model.player.chapterTitleEnabled !== false,
+              disabled: model.player.chaptersEnabled !== true
+            })}
             ${["intro", "recap", "outro", "movie-credits"]
               .map((type) => {
                 const translationType = type.replace(/-/g, "_");
@@ -192,6 +198,40 @@ export function renderPlaybackGeneralBody(model) {
             ${
               String(model.player.streamAutoPlayMode || "MANUAL") !== "MANUAL"
                 ? `
+            ${this.renderToggleRow({
+              focusKey: "playback:autoStreamFallback",
+              title: t("autoplay_fallback_next_source", {}, "Fallback to next matching source on failure"),
+              subtitle: t(
+                "autoplay_fallback_next_source_sub",
+                {},
+                "If the auto-selected source fails or does not start in time, quietly try the next matching sources."
+              ),
+              checked: model.player.streamAutoPlayFallbackOnFailure === true
+            })}
+            ${
+              model.player.streamAutoPlayFallbackOnFailure === true
+                ? `${this.renderActionRow({
+                    focusKey: "playback:autoStreamFallbackMaxSources",
+                    title: t("autoplay_fallback_max_sources", {}, "Sources to try on failure"),
+                    subtitle: t("autoplay_fallback_max_sources_sub", {}, "How many more matching sources to try before showing the error."),
+                    value: String(model.player.streamAutoPlayFallbackMaxSources)
+                  })}
+            ${this.renderActionRow({
+              focusKey: "playback:autoStreamFallbackTimeout",
+              title: t("autoplay_fallback_startup_timeout", {}, "Time for a source to start"),
+              subtitle: t(
+                "autoplay_fallback_startup_timeout_sub",
+                {},
+                "How long to wait for a source to start before trying the next one."
+              ),
+              value: t(
+                "autoplay_fallback_startup_timeout_value",
+                [model.player.streamAutoPlayFallbackStartupTimeoutSeconds],
+                `${model.player.streamAutoPlayFallbackStartupTimeoutSeconds}s`
+              )
+            })}`
+                : ""
+            }
             ${this.renderActionRow({
               focusKey: "playback:autoStreamSource",
               title: t("autoplay_scope", {}, "Auto-play Source Scope"),

@@ -16,7 +16,6 @@ export function createSettingsScreenMethods01() {
     resolveThemeName,
     PlayerSettingsStore,
     TorrentSettingsStore,
-    WebOsAudioCompatibilityStore,
     LayoutPreferences,
     ExperienceModeStore,
     MdbListSettingsStore,
@@ -70,6 +69,7 @@ export function createSettingsScreenMethods01() {
               <div class="settings-sidebar-frame">
                 <aside class="settings-sidebar" data-settings-nav></aside>
                 ${settingsScrollIndicatorMarkup("vertical")}
+                ${settingsScrollIndicatorMarkup("horizontal")}
               </div>
               <div class="settings-content-frame">
                 <section class="settings-content" data-settings-content></section>
@@ -159,7 +159,7 @@ export function createSettingsScreenMethods01() {
           this.sidebarProfile = sidebarProfile;
         }
         this.model = model;
-        await this.render({ refreshModel: false });
+        await this.render({ refreshModel: false, skipUnchangedContent: true });
       })().catch((error) => {
         if (this.isMounted && mountToken === this.settingsMountToken && Router.getCurrent() === "settings") {
           console.warn("Settings background model refresh failed", error);
@@ -201,9 +201,15 @@ export function createSettingsScreenMethods01() {
     },
     setActiveSection(sectionId) {
       const nextSectionId = sectionId || null;
+      if (nextSectionId !== "layout") this.closeCustomPosterPhoneConfig?.();
+      if (this.activeSection === "trakt" && nextSectionId !== "trakt") this.stopTrackingWork?.();
       if (this.activeSection && this.activeSection !== nextSectionId) {
         this.rememberAppearanceThemeFocusKey();
         this.collapseExpandedSection(this.activeSection);
+      }
+      if (nextSectionId !== "contentDiscovery") {
+        this.mediaServerDraft = null;
+        this.mediaServersView = null;
       }
       this.activeSection = sectionId || null;
       this.contentFocusKey = this.activeSection === "appearance" ? this.getAppearanceThemeFocusKey() : null;
@@ -213,6 +219,9 @@ export function createSettingsScreenMethods01() {
       this.ensureExpandedState(sectionId);
       this.expandedSections[sectionId][groupId] = !this.expandedSections[sectionId][groupId];
       this.persistUiState();
+      if (sectionId === "playback" && groupId === "p2p" && this.expandedSections[sectionId][groupId]) {
+        void this.refreshP2pCacheState({ render: true });
+      }
     },
     registerAction(focusKey, action) {
       this.actionMap.set(focusKey, action);
@@ -250,11 +259,6 @@ export function createSettingsScreenMethods01() {
         },
         memberAccess,
         player: PlayerSettingsStore.get(),
-        webOsAudioCompatibility: Platform.isWebOS()
-          ? WebOsAudioCompatibilityStore.get({
-              legacyForceAll: Boolean(PlayerSettingsStore.get().forceDtsTrueHdAudio)
-            })
-          : null,
         torrent: TorrentSettingsStore.get(),
         layout: LayoutPreferences.get(),
         homeCatalog: HomeCatalogStore.get(),
@@ -317,7 +321,7 @@ export function createSettingsScreenMethods01() {
         .map(
           (item, index) => `
           <button class="settings-nav-item focusable${this.activeSection === item.id ? " selected" : ""}"
-                  data-zone="nav"
+                  data-zone="nav" role="tab" aria-selected="${this.activeSection === item.id ? "true" : "false"}"
                   data-nav-index="${index}"
                   data-focus-key="nav:${item.id}"
                   data-section="${item.id}">

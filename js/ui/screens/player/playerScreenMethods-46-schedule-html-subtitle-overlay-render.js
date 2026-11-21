@@ -1,6 +1,14 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
+// The HTML subtitle overlay used to poll every 120 ms for the whole playback.
+// It now sleeps until the next cue boundary (bounded by the idle poll so a
+// stale clock, pause or rate change is picked up) and every timeupdate re-arms
+// it from the fresh position. Issue #1208.
+const HTML_SUBTITLE_MIN_DELAY_MS = 40;
+const HTML_SUBTITLE_IDLE_POLL_MS = 500;
+const HTML_SUBTITLE_BOUNDARY_SLACK_MS = 10;
+
 export function createPlayerScreenMethods46() {
   const {
     PlayerController,
@@ -14,30 +22,50 @@ export function createPlayerScreenMethods46() {
 
   return {
     scheduleHtmlSubtitleOverlayRender() {
-      if (!Array.isArray(this.htmlSubtitleCues) || !this.htmlSubtitleCues.length) {
+      if ((!Array.isArray(this.htmlSubtitleCues) || !this.htmlSubtitleCues.length) && !this.htmlSubtitleSelectedId) {
         return;
       }
       if (this.htmlSubtitleRenderTimer != null) {
         clearTimeout(this.htmlSubtitleRenderTimer);
         this.htmlSubtitleRenderTimer = null;
       }
-      const render = () => {
-        // webOS hands embedded subtitles over in blocks, so the cue list is empty
-        // for a moment between one block and the next. Blank the overlay and keep
-        // polling rather than ending the loop: ending it left the last cue painted
-        // on screen for the rest of playback, with no way back except reselecting
-        // the track, while the native renderer carried on underneath.
+      this.htmlSubtitleRenderLoopActive = true;
+      // The render plans the next wake-up through planHtmlSubtitleOverlayRender.
+      if (!this.renderHtmlSubtitleOverlayAtCurrentTime()) {
+        this.renderHtmlSubtitleOverlayCue([]);
+        if (this.htmlSubtitleSelectedId) {
+          this.planHtmlSubtitleOverlayRender();
+        } else {
+          this.htmlSubtitleRenderLoopActive = false;
+        }
+      }
+    },
+    planHtmlSubtitleOverlayRender(secondsUntilNextBoundary) {
+      if (!this.htmlSubtitleRenderLoopActive) {
+        return;
+      }
+      if (this.htmlSubtitleRenderTimer != null) {
+        clearTimeout(this.htmlSubtitleRenderTimer);
+        this.htmlSubtitleRenderTimer = null;
+      }
+      const rate = Number(this.getPlaybackSpeed?.() || 1);
+      const safeRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+      const until = Number(secondsUntilNextBoundary);
+      const requestedMs = Number.isFinite(until) ? (until * 1000) / safeRate + HTML_SUBTITLE_BOUNDARY_SLACK_MS : HTML_SUBTITLE_IDLE_POLL_MS;
+      const delayMs = clamp(Math.ceil(requestedMs), HTML_SUBTITLE_MIN_DELAY_MS, HTML_SUBTITLE_IDLE_POLL_MS);
+      this.htmlSubtitleRenderTimer = setTimeout(() => {
+        this.htmlSubtitleRenderTimer = null;
         if (!this.renderHtmlSubtitleOverlayAtCurrentTime()) {
+          // Embedded webOS subtitles arrive in blocks. An empty cue list is
+          // temporary while the track is still selected.
           this.renderHtmlSubtitleOverlayCue([]);
+          if (this.htmlSubtitleSelectedId) {
+            this.planHtmlSubtitleOverlayRender();
+          } else {
+            this.htmlSubtitleRenderLoopActive = false;
+          }
         }
-        if (!this.htmlSubtitleSelectedId) {
-          // clearHtmlSubtitleOverlay() tore the overlay down. Stop for good.
-          this.htmlSubtitleRenderTimer = null;
-          return;
-        }
-        this.htmlSubtitleRenderTimer = setTimeout(render, 120);
-      };
-      render();
+      }, delayMs);
     },
     isAvPlaySubtitleControlPayload(value = "") {
       const text = String(value || "").trim();
@@ -79,6 +107,12 @@ export function createPlayerScreenMethods46() {
           ...values
         });
       };
+      // VobSub is drawn by the local bitmap decoder; AVPlay remains selected
+      // only to keep the track state, with its own output muted.
+      if (this.bitmapSubtitleTrack) {
+        logTizenSubtitleRendererDiagnostic("delegated-to-bitmap-decoder");
+        return;
+      }
       // SubRip is rendered from the bounded Matroska extractor below. Ignore a
       // late AVPlay callback only while that HTML overlay is active, so a failed
       // extractor can still fall back to native AVPlay rendering.
@@ -182,11 +216,18 @@ export function createPlayerScreenMethods46() {
             body: raw.body,
             selectionToken
           });
+          if (assResult.stale) return false;
           if (assResult.applied && isCurrentSelection()) {
             this.selectedAddonSubtitleId = subtitleId;
             this.selectedSubtitleTrackIndex = -1;
             this.selectedEmbeddedSubtitleTrackIndex = -1;
             this.selectedManifestSubtitleTrackId = null;
+            this.setAddonSubtitleAutoSyncSource({
+              subtitle,
+              subtitleId,
+              rawBody: raw.body,
+              isAss: true
+            });
             this.invalidateTrackDialogCaches();
             this.renderControlButtons();
             this.renderSubtitleDialog();
@@ -204,6 +245,7 @@ export function createPlayerScreenMethods46() {
             this.selectedSubtitleTrackIndex = -1;
             this.selectedEmbeddedSubtitleTrackIndex = -1;
             this.selectedManifestSubtitleTrackId = null;
+            this.setAddonSubtitleAutoSyncSource({ subtitle, subtitleId, cues: fallbackCues });
             this.renderHtmlSubtitleOverlayCue([]);
             this.scheduleHtmlSubtitleOverlayRender();
             this.invalidateTrackDialogCaches();
@@ -237,6 +279,7 @@ export function createPlayerScreenMethods46() {
           this.selectedSubtitleTrackIndex = -1;
           this.selectedEmbeddedSubtitleTrackIndex = -1;
           this.selectedManifestSubtitleTrackId = null;
+          this.setAddonSubtitleAutoSyncSource({ subtitle, subtitleId, cues, rawBody: raw.body });
           this.renderHtmlSubtitleOverlayCue([]);
           this.scheduleHtmlSubtitleOverlayRender();
           this.invalidateTrackDialogCaches();
@@ -286,6 +329,7 @@ export function createPlayerScreenMethods46() {
       this.selectedSubtitleTrackIndex = -1;
       this.selectedEmbeddedSubtitleTrackIndex = -1;
       this.selectedManifestSubtitleTrackId = null;
+      this.setAddonSubtitleAutoSyncSource({ subtitle, subtitleId, cues, rawBody: text });
       this.renderHtmlSubtitleOverlayCue([]);
       this.scheduleHtmlSubtitleOverlayRender();
       this.invalidateTrackDialogCaches();

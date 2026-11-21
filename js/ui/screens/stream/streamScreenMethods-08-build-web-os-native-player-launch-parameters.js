@@ -1,3 +1,5 @@
+import { saveReusableStreamLink } from "../../../core/streams/streamLinkReuse.js";
+import { streamProviderHeader } from "../../../core/streams/streamOrdering.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./streamScreen.js";
 
@@ -20,7 +22,6 @@ export function createStreamScreenMethods08() {
     normalizeExternalLaunchFileName,
     getAddonBadgeLabel,
     getStreamHeadline,
-    getStreamQuality,
     getStreamDescriptionLines,
     renderStreamBadges,
     hasStreamBadges,
@@ -83,6 +84,7 @@ export function createStreamScreenMethods08() {
         return;
       }
 
+      const linkContext = { params: { ...this.params }, streamLinkCacheProfileId: this.streamLinkCacheProfileId };
       this.nativePlayerPendingStreamId = streamId;
       this.requestRender({ delayMs: 0 });
       try {
@@ -104,6 +106,10 @@ export function createStreamScreenMethods08() {
           method: "launch",
           parameters: launchParameters
         });
+        saveReusableStreamLink(linkContext, result.stream, {
+          url: this.getWebOsNativeLaunchUrl(result.stream),
+          headers: this.getStreamRequestHeaders(result.stream)
+        });
         this.showStreamToast(t("player_external_launching_media_player", {}, "Opening Native Player"));
       } catch (error) {
         console.warn("Failed to open stream in native player", { streamId, error });
@@ -115,6 +121,7 @@ export function createStreamScreenMethods08() {
     },
     buildSourceChipMarkup() {
       return [
+        `<button class="stream-route-chip focusable" data-action="refreshStreams" aria-label="${escapeHtml(t("cd_refresh", {}, "Refresh"))}"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.93 9h-2.02A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/></svg></button>`,
         this.renderChip("all", this.addonFilter === "all", "success"),
         ...this.getOrderedFilterNames().map((name) => {
           const chip = this.sourceChips.find((entry) => entry.name === name) || {
@@ -135,7 +142,7 @@ export function createStreamScreenMethods08() {
         this.addonFilter = "all";
         this.listScrollTop = 0;
         const allStreams = this.getFilteredStreams("all");
-        this.focusState = allStreams.length ? { zone: "card", row: 0, action: "play" } : { zone: "filter", index: 0 };
+        this.focusState = allStreams.length ? { zone: "card", row: 0, action: "play" } : { zone: "filter", index: 1 };
         this.streamVirtualFocusReset = true;
         this.streamVirtualPreferredIndex = allStreams.length ? 0 : null;
         filterReset = true;
@@ -189,10 +196,12 @@ export function createStreamScreenMethods08() {
       index,
       streamBadgesEnabled = true,
       badgeSettings = null,
-      { streamKey = index, virtualized = false, virtualRowGap = null, virtualLast = false } = {}
+      { streamKey = index, virtualized = false, virtualRowGap = null, virtualLast = false, previousStream = null } = {}
     ) {
       const headline = getStreamHeadline(stream);
-      const quality = getStreamQuality(stream);
+      const providerHeader = streamProviderHeader(stream, previousStream);
+      const partyShared = Boolean(stream.partyShared);
+      const partySource = !partyShared && Boolean(this.isPartySourceStream?.(stream));
       const lazyBadges = isPerformanceConstrainedRuntime() && hasStreamBadges(stream, streamBadgesEnabled, badgeSettings);
       const badges = lazyBadges
         ? `<div class="stream-route-card-badges stream-route-card-badges-lazy" data-lazy-stream-badges data-stream-badge-row="${index}" data-badges-hydrated="false" aria-label="${escapeHtml(t("settings_stream_badges_section", {}, "Fusion Style"))}"></div>`
@@ -201,6 +210,7 @@ export function createStreamScreenMethods08() {
       const badgePlacement = resolveStreamBadgePlacement(badgeSettings);
       const topBadges = badgePlacement === "TOP" ? badges : "";
       const bottomBadges = badgePlacement === "BOTTOM" ? badges : "";
+      // Filename punctuation needs wrap opportunities to avoid an icon-only first line.
       const descriptionLines = getStreamDescriptionLines(stream);
       let addonIdentity = "";
       if (showAddonLogo) {
@@ -234,17 +244,19 @@ export function createStreamScreenMethods08() {
           ? ` style="margin-bottom:${virtualLast ? 0 : Math.max(0, Number(virtualRowGap))}px"`
           : "";
       return `
-          <div class="stream-route-card-row" data-stream-key="${escapeHtml(streamKey)}" data-stream-row="${index}"${virtualRowStyle}>
-            <article class="stream-route-card stream-route-card-action focusable${this.isCardActionFocused(index, "play") ? " focused" : ""}"
+          <div class="stream-route-card-row${partyShared ? " is-party-shared" : ""}" data-stream-key="${escapeHtml(String(streamKey))}" data-stream-row="${index}"${virtualRowStyle}>
+            ${providerHeader ? `<div class="stream-route-provider-label" dir="${contentTextDirection(providerHeader)}">${escapeHtml(providerHeader)}</div>` : ""}
+            ${partyShared ? `<div class="stream-route-party-label">${escapeHtml(t("party_shared_by", [stream.partyHostName || ""], "Shared by %1$s"))}</div>` : ""}
+            <article class="stream-route-card stream-route-card-action focusable${partyShared ? " is-party-marked" : ""}${this.isCardActionFocused(index, "play") ? " focused" : ""}"
                      data-action="playStream"
                      data-card-action="play"
                      data-stream-id="${escapeHtml(stream.id)}"
                      data-stream-row="${index}">
               <div class="stream-route-card-copy">
-                <div class="stream-route-card-heading" dir="${contentTextDirection(headline)}">${escapeHtml(headline)}</div>
                 ${topBadges || ""}
-                ${!badges ? `<div class="stream-route-card-quality" dir="${contentTextDirection(quality)}">${escapeHtml(quality)}</div>` : ""}
-                ${descriptionLines.map((line, lineIndex) => `<div class="stream-route-card-line${lineIndex > 0 ? " secondary" : ""}" dir="${contentTextDirection(line)}">${escapeHtml(line)}</div>`).join("")}
+                <div class="stream-route-card-heading" dir="${contentTextDirection(headline)}">${escapeHtml(headline)}</div>
+                ${partySource ? `<div class="stream-route-party-source" dir="auto">${escapeHtml(t("party_source", {}, "Party's source"))}</div>` : ""}
+                ${descriptionLines.map((line, lineIndex) => `<div class="stream-route-card-line${lineIndex > 0 ? " secondary" : ""}" dir="${contentTextDirection(line)}">${escapeHtml(line).replace(/([._-])(?=\S)/g, "$1<wbr>")}</div>`).join("")}
                 ${bottomBadges || ""}
               </div>
               ${addonIdentity}
@@ -281,7 +293,7 @@ export function createStreamScreenMethods08() {
         `;
     },
     renderStableStreamEmptyState() {
-      return `<div class="stream-route-empty" data-stream-empty hidden style="display:none">${escapeHtml(t("sources_no_streams", {}, "No streams found"))}</div>`;
+      return `<div class="stream-route-empty" data-stream-empty hidden style="display:none"><p>${escapeHtml(t("sources_no_streams", {}, "No streams found"))}</p><p>${escapeHtml(t("stream_no_streams_hint"))}</p></div>`;
     }
   };
 }

@@ -1,3 +1,5 @@
+import { handleListedStreamRedirect } from "./streamRedirectMetadata.js";
+import { syncHtmlSubtitleClearance } from "./subtitleOverlayClearance.js";
 import * as internals from "./playerScreenContext.js";
 import { createPlayerVideoLifecycleHandlers } from "./playerVideoLifecycleHandlers.js";
 import { createPlayerVideoEventHandlers } from "./playerVideoEventHandlers.js";
@@ -26,6 +28,15 @@ export function createPlayerScreenMethods27() {
         lifecycleHandlers;
       const { onWebOsAudioTrackSelectionChanged, onAvPlaySubtitleChange, onError } = eventHandlers;
       const bindings = [
+        [
+          "webosexactseekvisual",
+          (event) => {
+            if (!Environment.isWebOS() || !this.seekLoading) return;
+            this.seekLoadingVisualComplete = event.detail?.moving === true;
+            this.updateLoadingVisibility();
+          }
+        ],
+        ["streamredirect", (event) => handleListedStreamRedirect(this, PlayerController, event.detail)],
         ["waiting", onWaiting],
         ["playing", onPlaying],
         ["error", onError],
@@ -39,6 +50,14 @@ export function createPlayerScreenMethods27() {
         ["avplaytrackschanged", onTrackListChanged],
         ["avplaysubtitlechange", onAvPlaySubtitleChange],
         ["webosaudiotrackselectionchanged", onWebOsAudioTrackSelectionChanged],
+        [
+          "webosaudioconversionchanged",
+          () => {
+            this.invalidateTrackDialogCaches();
+            this.renderAudioDialog();
+            this.updateLoadingVisibility();
+          }
+        ],
         ["hlstrackschanged", onTrackListChanged],
         ["dashtrackschanged", onTrackListChanged]
       ];
@@ -68,6 +87,7 @@ export function createPlayerScreenMethods27() {
             };
           }
           this.syncPostPlayPlayerSurface(this.getPostPlayState());
+          syncHtmlSubtitleClearance(this);
         };
         window.addEventListener("resize", onViewportResize);
         this.videoListeners.push({

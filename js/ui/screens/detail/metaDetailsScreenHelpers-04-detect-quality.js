@@ -130,7 +130,7 @@ export function formatMdbListRating(provider, rating) {
 }
 
 export function hasMdbListRatings(ratings = {}) {
-  return ["trakt", "imdb", "tmdb", "letterboxd", "tomatoes", "audience", "metacritic"].some(
+  return ["trakt", "imdb", "tmdb", "letterboxd", "tomatoes", "audience", "metacritic", "mal"].some(
     (key) => ratings?.[key] != null && String(ratings[key]).trim() !== ""
   );
 }
@@ -162,7 +162,7 @@ export function formatMovieReleaseDate(meta = {}) {
       if (LayoutPreferences.get().showFullReleaseDate === false) {
         return String(parsed.getFullYear());
       }
-      return new Intl.DateTimeFormat(undefined, {
+      return new Intl.DateTimeFormat(I18n.getLocale(), {
         month: "long",
         day: "numeric",
         year: "numeric"
@@ -292,6 +292,7 @@ export function renderWatchedGlyph(isWatched = false) {
 
 export function ratingToneClass(value) {
   const num = Number(value || 0);
+  if (num >= 9.7) return "exceptional";
   if (num >= 9) return "excellent";
   if (num >= 8) return "great";
   if (num >= 7.5) return "good";

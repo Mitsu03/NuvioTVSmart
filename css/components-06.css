@@ -219,15 +219,27 @@
   border-radius: 999px;
 }
 
-.nuvio-dialog-button.poster-list-picker-list-button.selected {
-  background: rgb(var(--secondary-color-rgb) / 0.28);
-  color: #ffffff;
-}
-
+/* Android PosterListPickerDialog: same card colour either way; a saved list
+   gets a semibold name and a trailing 20dp check with a 12dp gap. */
 .nuvio-dialog-button.poster-list-picker-list-button {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 19px;
+}
+
+.nuvio-dialog-button.poster-list-picker-list-button .nuvio-dialog-button-label {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+.nuvio-dialog-button.poster-list-picker-list-button.selected .nuvio-dialog-button-label {
+  font-weight: 600;
+}
+
+.nuvio-dialog-button.poster-list-picker-list-button .nuvio-dialog-button-check {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
 }
 
 .nuvio-dialog-button-check {
@@ -347,7 +359,7 @@
   color: #fff;
   box-shadow:
     inset 0 0 0 1px var(--error-color),
-    0 0 0 1px rgb(var(--focus-color-rgb) / 0.28);
+    0 0 0 1px rgba(var(--focus-color-rgb-legacy), 0.28);
 }
 
 .content-poster {
@@ -361,6 +373,14 @@
 
 .content-poster.placeholder {
   background: linear-gradient(135deg, #1b2028, #12161d);
+}
+
+/* Artwork that is pending, being rescaled or out of fallbacks would paint a
+   broken-image frame and glyph; draw a transparent pixel so only the card
+   surface shows, like Android TV. */
+img:not([src]),
+img.placeholder {
+  content: url("data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7");
 }
 
 .featured-backdrop {
@@ -397,72 +417,70 @@
   height: 96px;
   flex: none;
   overflow: visible;
-  color: var(--text-secondary);
 }
 
-.nuvio-loading-indicator-spoke {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
+.nuvio-loading-indicator-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.nuvio-loading-indicator-arc {
+  animation: nuvioLoadingIndicatorArc 2000ms linear infinite;
+}
+
+/* The arc above animates stroke-dash data on the main thread, so it freezes
+   while Home mounts. A pre-rendered strip of the same Android frames scrolls
+   with a transform, which the compositor keeps moving through that task. */
+.home-loading-spinner.has-loader-sprite {
+  overflow: hidden;
+}
+
+.home-loading-spinner.has-loader-sprite .nuvio-loading-indicator-svg {
   opacity: 0;
-  transform-origin: 50% 50%;
-  animation: nuvioLoadingIndicatorFade 1000ms cubic-bezier(0.167, 0.167, 0.833, 0.833) infinite;
 }
 
-.nuvio-loading-indicator-spoke::before {
+/* The strip is 120 frames wide and the 96px box clips it, so translating it
+   swaps frames without moving the loader itself. */
+.home-loading-spinner.has-loader-sprite::before {
   content: "";
   position: absolute;
-  top: 17.333%;
-  left: 46.667%;
-  width: 6.667%;
-  height: 17%;
-  border-radius: 999px;
-  background: currentColor;
+  top: 0;
+  left: 0;
+  width: calc(96px * 120);
+  height: 96px;
+  background-image: var(--loader-sprite);
+  background-repeat: no-repeat;
+  background-size: calc(96px * 120) 96px;
+  animation: homeLoadingSprite 2000ms steps(120) infinite;
+  animation-delay: var(--loader-sprite-delay, 0ms);
+  will-change: transform;
 }
 
-.nuvio-loading-indicator-spoke:nth-child(1) {
-  transform: rotate(0deg);
-  animation-delay: 0ms;
+@keyframes homeLoadingSprite {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-96px * 120));
+  }
 }
 
-.nuvio-loading-indicator-spoke:nth-child(2) {
-  transform: rotate(30deg);
-  animation-delay: -916.667ms;
+/* Constrained and legacy TVs get half the frames, so the strip is half as
+   wide and half the decoded texture. */
+.home-loading-spinner.has-loader-sprite.has-loader-sprite-60::before {
+  width: calc(96px * 60);
+  background-size: calc(96px * 60) 96px;
+  animation: homeLoadingSprite60 2000ms steps(60) infinite;
+  animation-delay: var(--loader-sprite-delay, 0ms);
 }
 
-.nuvio-loading-indicator-spoke:nth-child(3) {
-  transform: rotate(60deg);
-  animation-delay: -833.333ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(4) {
-  transform: rotate(90deg);
-  animation-delay: -750ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(5) {
-  transform: rotate(120deg);
-  animation-delay: -666.667ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(6) {
-  transform: rotate(150deg);
-  animation-delay: -583.333ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(7) {
-  transform: rotate(180deg);
-  animation-delay: -500ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(8) {
-  transform: rotate(210deg);
-  animation-delay: -416.667ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(9) {
-  transform: rotate(240deg);
-  animation-delay: -333.333ms;
+@keyframes homeLoadingSprite60 {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-96px * 60));
+  }
 }

@@ -67,7 +67,7 @@
   width: 100%;
   height: 6px;
   border-radius: 999px;
-  background: rgb(var(--focus-color-rgb) / 0.3);
+  background: rgba(var(--focus-color-rgb-legacy), 0.3);
   overflow: hidden;
 }
 
@@ -128,16 +128,16 @@
   /* Android TV BackdropLayer leftGradient: fadeWidth = 78% of screen. */
   background: linear-gradient(
     90deg,
-    rgb(var(--bg-color-rgb) / 1) 0%,
-    rgb(var(--bg-color-rgb) / 0.95) 7.8%,
-    rgb(var(--bg-color-rgb) / 0.84) 17.16%,
-    rgb(var(--bg-color-rgb) / 0.7) 28.08%,
-    rgb(var(--bg-color-rgb) / 0.52) 40.56%,
-    rgb(var(--bg-color-rgb) / 0.34) 51.48%,
-    rgb(var(--bg-color-rgb) / 0.18) 60.84%,
-    rgb(var(--bg-color-rgb) / 0.07) 70.2%,
-    rgb(var(--bg-color-rgb) / 0) 78%,
-    rgb(var(--bg-color-rgb) / 0) 100%
+    rgba(var(--bg-color-rgb-legacy), 1) 0%,
+    rgba(var(--bg-color-rgb-legacy), 0.95) 7.8%,
+    rgba(var(--bg-color-rgb-legacy), 0.84) 17.16%,
+    rgba(var(--bg-color-rgb-legacy), 0.7) 28.08%,
+    rgba(var(--bg-color-rgb-legacy), 0.52) 40.56%,
+    rgba(var(--bg-color-rgb-legacy), 0.34) 51.48%,
+    rgba(var(--bg-color-rgb-legacy), 0.18) 60.84%,
+    rgba(var(--bg-color-rgb-legacy), 0.07) 70.2%,
+    rgba(var(--bg-color-rgb-legacy), 0) 78%,
+    rgba(var(--bg-color-rgb-legacy), 0) 100%
   );
   transition: opacity 800ms cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -202,7 +202,7 @@
 }
 
 .detail-hero-body {
-  max-height: 760px;
+  max-height: 1100px;
   opacity: 1;
   overflow: hidden;
   transform: translateY(0);
@@ -221,9 +221,9 @@
   margin-bottom: clamp(18px, 1.4vw, 26px);
   transform-origin: left bottom;
   transition:
-    max-width 600ms cubic-bezier(0.4, 0, 0.2, 1),
-    max-height 600ms cubic-bezier(0.4, 0, 0.2, 1),
-    margin-bottom 600ms cubic-bezier(0.4, 0, 0.2, 1);
+    width 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    height 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    padding-bottom 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .detail-trailer-autoplay .series-detail-logo {

@@ -2,7 +2,7 @@
 import * as internals from "./playerController.js";
 
 export function createPlayerControllerMethods09() {
-  const { Platform, logTizenAvPlayDebug } = internals;
+  const { Platform, logTizenAvPlayDebug, isTizenAvPlayDebugEnabled } = internals;
 
   return {
     playWithAvPlay(url, requestHeaders = {}, _sourceType = null, playToken = null) {
@@ -24,6 +24,7 @@ export function createPlayerControllerMethods09() {
       this.avplayReady = false;
       this.avplayEnded = false;
       this.avplayCurrentTimeMs = 0;
+      this.avplayTimelinePolledAt = 0;
       this.avplayDurationMs = 0;
       this.avplaySubtitleDiagnosticCallbackPendingAt = 0;
       this.lastPlaybackErrorCode = 0;
@@ -38,7 +39,7 @@ export function createPlayerControllerMethods09() {
         this.configureAvPlayForSource(requestHeaders);
         this.configureAvPlayBuffering();
       } catch (error) {
-        this.lastPlaybackErrorCode = this.mapAvPlayErrorToMediaCode(error?.name || error?.message || error);
+        this.lastPlaybackErrorCode = this.mapAvPlayErrorToMediaCode([error?.name, error?.message].filter(Boolean).join(": ") || error);
         this.teardownAvPlay();
         this.playbackEngine = "none";
         return false;
@@ -65,11 +66,15 @@ export function createPlayerControllerMethods09() {
             if (Number.isFinite(numericPercent)) {
               this.avplayBufferingProgress = Math.max(0, Math.min(100, numericPercent));
             }
-            logTizenAvPlayDebug("Tizen AVPlay buffering progress", {
-              percent: this.avplayBufferingProgress,
-              state: this.getAvPlayState(),
-              currentTimeMs: this.avplayCurrentTimeMs
-            });
+            // Fired per percent; getState() is a bridge call, so build the
+            // log object only when AVPlay diagnostics are on (issue #1208).
+            if (typeof isTizenAvPlayDebugEnabled !== "function" || isTizenAvPlayDebugEnabled()) {
+              logTizenAvPlayDebug("Tizen AVPlay buffering progress", {
+                percent: this.avplayBufferingProgress,
+                state: this.getAvPlayState(),
+                currentTimeMs: this.avplayCurrentTimeMs
+              });
+            }
           },
           onbufferingcomplete: () => {
             if (!this.isPlaybackRequestActive(playToken, url)) {
@@ -214,6 +219,14 @@ export function createPlayerControllerMethods09() {
         this.emitVideoEvent("loadeddata", { playbackEngine: this.playbackEngine });
         this.emitVideoEvent("canplay", { playbackEngine: this.playbackEngine });
         this.emitVideoEvent("avplaytrackschanged", { playbackEngine: this.playbackEngine });
+        // Apply a seek that was requested while prepareAsync() was running
+        // (normally the resume position). AVPlay is READY now, where seekTo()
+        // is valid; the playback start below waits for it to settle.
+        const deferredSeekMs = Number(this.avplayDeferredSeekMs || 0);
+        this.avplayDeferredSeekMs = 0;
+        if (deferredSeekMs > 0 && !this.avplaySeekInFlight) {
+          this.seekAvPlayTo(deferredSeekMs);
+        }
         if (this.startupAudioGateActive) {
           return;
         }
@@ -251,7 +264,7 @@ export function createPlayerControllerMethods09() {
           onPrepareError("prepare_not_supported");
         }
       } catch (error) {
-        onPrepareError(error?.name || error?.message || error);
+        onPrepareError([error?.name, error?.message].filter(Boolean).join(": ") || error);
       }
 
       return true;

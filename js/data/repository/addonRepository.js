@@ -1,3 +1,4 @@
+import { MediaServerRepository } from "../mediaserver/mediaServerRepository.js";
 import { safeApiCall } from "../../core/network/safeApiCall.js";
 import { LocalStore } from "../../core/storage/localStore.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
@@ -33,6 +34,8 @@ class AddonRepository {
     this.manifestErrorCache = new Map();
     this.manifestRequests = new Map();
     this.manifestRefreshRequests = new Map();
+    this.lastManifestRefreshAttemptAt = 0;
+    this.backgroundManifestRefreshRequest = null;
     this.manifestCachePersistTimer = null;
     this.installedAddonsCache = null;
     this.installedAddonsCacheKey = "";
@@ -76,6 +79,11 @@ class AddonRepository {
       addon &&
       typeof addon === "object" &&
       this.canonicalizeUrl(addon.baseUrl) === baseUrl &&
+      !(
+        baseUrl === "https://v3-cinemeta.strem.io" &&
+        addon.id === "org.cinemeta" &&
+        addon.version === "fallback"
+      ) &&
       Array.isArray(addon.catalogs) &&
       Array.isArray(addon.resources)
     );
@@ -133,10 +141,13 @@ class AddonRepository {
     return didDelete;
   }
 
-  isManifestCacheStale(baseUrl) {
-    const cleanBaseUrl = this.canonicalizeUrl(baseUrl);
-    const cachedAtMs = Number(this.manifestCacheTimestamps.get(cleanBaseUrl) || 0);
-    return !cachedAtMs || Date.now() - cachedAtMs >= MANIFEST_CACHE_TTL_MS;
+  isManifestCacheStale() {
+    // Android revalidates disk snapshots in each new process and spaces refresh
+    // attempts within that session, including attempts that fail while offline.
+    return (
+      !this.lastManifestRefreshAttemptAt ||
+      Date.now() - this.lastManifestRefreshAttemptAt > MANIFEST_CACHE_TTL_MS
+    );
   }
 
   canonicalizeUrl(url) {
@@ -313,10 +324,34 @@ class AddonRepository {
   }
 
   readProfileScopedValue(key, normalizeValue, defaultValue, profileId = null) {
+    // Reading parses, normalizes and re-serializes the whole envelope, and one
+    // installed-addons lookup asks for the same key once per addon. Reuse the
+    // result until the key, the profile list or the active profile changes.
+    const requestedProfileId = String(profileId ?? ProfileManager.getActiveProfileId() ?? "1");
+    const cached = (this.profileScopedValueCache ||= new Map()).get(key);
+    const isFresh = () =>
+      cached.keyRevision === LocalStore.revision(key) &&
+      cached.profilesRevision === LocalStore.revision(PROFILES_KEY) &&
+      cached.profileId === requestedProfileId;
+    if (cached && isFresh()) {
+      return this.cloneValue(cached.value);
+    }
     const envelope = this.readProfileScopedEnvelope(key, normalizeValue);
-    return this.cloneValue(
-      this.ensureProfileScopedValue(key, envelope, normalizeValue, defaultValue, profileId)
+    const value = this.ensureProfileScopedValue(
+      key,
+      envelope,
+      normalizeValue,
+      defaultValue,
+      profileId
     );
+    // Stamp after the read: it may rewrite the key while normalizing it.
+    this.profileScopedValueCache.set(key, {
+      keyRevision: LocalStore.revision(key),
+      profilesRevision: LocalStore.revision(PROFILES_KEY),
+      profileId: requestedProfileId,
+      value: this.cloneValue(value)
+    });
+    return this.cloneValue(value);
   }
 
   writeProfileScopedValue(key, normalizeValue, value, profileId = null) {
@@ -397,11 +432,11 @@ class AddonRepository {
     );
   }
 
-  isAddonEnabled(url) {
+  // Each getAddonEnabledStates() call re-reads and re-normalizes the stored
+  // envelope; callers that filter a URL list pass one snapshot for the batch.
+  isAddonEnabled(url, enabledStates = this.getAddonEnabledStates()) {
     const cleanUrl = this.normalizeCinemetaUrl(this.canonicalizeUrl(url));
-    return cleanUrl
-      ? this.getAddonMapValue(this.getAddonEnabledStates(), cleanUrl) !== false
-      : false;
+    return cleanUrl ? this.getAddonMapValue(enabledStates, cleanUrl) !== false : false;
   }
 
   getAddonMapValue(map, url) {
@@ -547,13 +582,6 @@ class AddonRepository {
         return { status: "success", data: this.withDisplayNameOverride(cached) };
       }
 
-      const fallback = this.getBuiltinFallbackManifest(cleanBaseUrl);
-      if (fallback) {
-        this.setManifestCacheEntry(cleanBaseUrl, fallback);
-        this.manifestErrorCache.delete(cleanBaseUrl);
-        return { status: "success", data: this.withDisplayNameOverride(fallback) };
-      }
-
       this.manifestErrorCache.set(cleanBaseUrl, result);
       return result;
     })();
@@ -578,9 +606,10 @@ class AddonRepository {
   getCachedInstalledAddons(urls = null, options = {}) {
     const includeDisabled = Boolean(options?.includeDisabled);
     const normalizedUrls = Array.isArray(urls) ? urls : this.getInstalledAddonUrls();
+    const enabledStates = includeDisabled ? null : this.getAddonEnabledStates();
     const selectedUrls = includeDisabled
       ? normalizedUrls
-      : normalizedUrls.filter((url) => this.isAddonEnabled(url));
+      : normalizedUrls.filter((url) => this.isAddonEnabled(url, enabledStates));
     const addons = selectedUrls
       .map((url) => this.manifestCache.get(this.canonicalizeUrl(url)))
       .filter(Boolean);
@@ -594,11 +623,12 @@ class AddonRepository {
     const requestedUrlSet = new Set(
       requestedUrls.map((url) => this.canonicalizeUrl(url)).filter(Boolean)
     );
+    const refreshEnabledStates = includeDisabled ? null : this.getAddonEnabledStates();
     const urls = allUrls
       .map((url) => this.canonicalizeUrl(url))
       .filter((url, index, values) => values.indexOf(url) === index)
       .filter((url) => requestedUrlSet.has(url))
-      .filter((url) => includeDisabled || this.isAddonEnabled(url));
+      .filter((url) => includeDisabled || this.isAddonEnabled(url, refreshEnabledStates));
     const timeoutMs = options?.timeoutMs;
     const refreshKey = JSON.stringify({
       profileId: this.getActiveStorageProfileId(),
@@ -643,10 +673,16 @@ class AddonRepository {
   }
 
   async getInstalledAddons(options = {}) {
+    if (options.includeMediaServers) {
+      const addons = await this.getInstalledAddons({ ...options, includeMediaServers: false });
+      return [...addons, ...MediaServerRepository.addons()];
+    }
     const includeDisabled = Boolean(options?.includeDisabled);
     const allUrls = this.getInstalledAddonUrls();
     const enabledStates = this.getAddonEnabledStates();
-    const urls = includeDisabled ? allUrls : allUrls.filter((url) => this.isAddonEnabled(url));
+    const urls = includeDisabled
+      ? allUrls
+      : allUrls.filter((url) => this.isAddonEnabled(url, enabledStates));
     const cacheKey = JSON.stringify({
       profileId: this.getActiveStorageProfileId(),
       urls,
@@ -660,18 +696,28 @@ class AddonRepository {
     const timeoutMs = options?.timeoutMs;
 
     if (staleWhileRevalidate && !force) {
-      const refreshUrls = urls.filter(
-        (url) =>
-          !this.manifestCache.has(this.canonicalizeUrl(url)) || this.isManifestCacheStale(url)
-      );
+      const missingUrls = urls.filter((url) => !this.manifestCache.has(this.canonicalizeUrl(url)));
+      const refreshCached = !this.backgroundManifestRefreshRequest && this.isManifestCacheStale();
+      const refreshUrls = refreshCached ? urls : missingUrls;
       if (refreshUrls.length) {
-        void this.refreshInstalledAddons({
+        // Record the attempt before starting IO so repeated Home loads cannot
+        // launch another sweep. Cache misses remain eligible independently.
+        if (refreshCached) this.lastManifestRefreshAttemptAt = Date.now();
+        const request = this.refreshInstalledAddons({
           urls: refreshUrls,
           includeDisabled,
           timeoutMs
-        }).catch((error) => {
-          console.warn("Background addon manifest refresh failed", error);
         });
+        if (refreshCached) this.backgroundManifestRefreshRequest = request;
+        void request
+          .catch((error) => {
+            console.warn("Background addon manifest refresh failed", error);
+          })
+          .finally(() => {
+            if (this.backgroundManifestRefreshRequest === request) {
+              this.backgroundManifestRefreshRequest = null;
+            }
+          });
       }
       return this.getCachedInstalledAddons(urls, { includeDisabled });
     }
@@ -1116,42 +1162,6 @@ class AddonRepository {
       /https?:\/\/cinemeta-v3\.strem\.io/i,
       "https://v3-cinemeta.strem.io"
     );
-  }
-
-  getBuiltinFallbackManifest(baseUrl) {
-    if (this.canonicalizeUrl(baseUrl) !== "https://v3-cinemeta.strem.io") {
-      return null;
-    }
-
-    return {
-      id: "org.cinemeta",
-      name: "Cinemeta",
-      displayName: "Cinemeta",
-      version: "fallback",
-      description: "Fallback Cinemeta manifest",
-      logo: null,
-      baseUrl: "https://v3-cinemeta.strem.io",
-      types: ["movie", "series"],
-      rawTypes: ["movie", "series"],
-      resources: [
-        { name: "catalog", types: ["movie", "series"], idPrefixes: null },
-        { name: "meta", types: ["movie", "series"], idPrefixes: null }
-      ],
-      catalogs: [
-        {
-          id: "top",
-          name: "Top Movies",
-          apiType: "movie",
-          extra: [{ name: "search" }]
-        },
-        {
-          id: "top",
-          name: "Top Series",
-          apiType: "series",
-          extra: [{ name: "search" }]
-        }
-      ]
-    };
   }
 }
 

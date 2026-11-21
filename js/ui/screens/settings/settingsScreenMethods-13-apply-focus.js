@@ -104,10 +104,14 @@ export function createSettingsScreenMethods13() {
       if (navNode) {
         navNode.classList.add("focused");
         focusSettingsNode(navNode);
-        if (this.suppressNextRailFocusScroll) {
+        const rail = navNode.closest?.(".settings-sidebar");
+        // Only the vertical rail restores its scroll position; the horizontal one has to follow focus.
+        const horizontalRail = Boolean(rail && rail.scrollWidth > rail.clientWidth + 1);
+        if (this.suppressNextRailFocusScroll && !horizontalRail) {
           this.suppressNextRailFocusScroll = false;
-          updateSettingsRailIndicators(navNode.closest?.(".settings-sidebar"));
+          updateSettingsRailIndicators(rail);
         } else {
+          this.suppressNextRailFocusScroll = false;
           scrollSettingsRailItem(navNode);
         }
         updateSettingsMarqueeTargets(this.container);
@@ -135,15 +139,14 @@ export function createSettingsScreenMethods13() {
     },
     moveNavFocus(index) {
       this.navIndex = clamp(index, 0, this.visibleSections.length - 1);
-      this.applyFocus();
+      const section = this.visibleSections[this.navIndex];
+      if (section && this.activeSection !== section.id) {
+        void this.activateNavSelection().catch((error) => console.warn("Settings section could not open", error));
+      } else this.applyFocus();
     },
     async activateNavSelection() {
       const section = this.visibleSections[this.navIndex];
       if (!section) {
-        return;
-      }
-      if (section.id === "trakt") {
-        await Router.navigate("trakt");
         return;
       }
       this.setActiveSection(section.id);

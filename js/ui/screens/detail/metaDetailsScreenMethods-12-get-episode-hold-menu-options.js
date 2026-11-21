@@ -1,8 +1,10 @@
+import { getPosterListPickerOptions } from "../../components/posterOptionsMenu.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./metaDetailsScreenContext.js";
 
 export function createMetaDetailsScreenMethods12() {
-  const { libraryRepository, NuvioDialog, isWatchProgressInProgress, t } = internals;
+  const { libraryRepository, NuvioDialog, isWatchProgressInProgress, t, resolveMetaImdbId, resolveMetaTmdbId, resolveMetaTraktId } =
+    internals;
 
   return {
     getEpisodeHoldMenuOptions() {
@@ -57,7 +59,7 @@ export function createMetaDetailsScreenMethods12() {
         return [];
       }
       const fullyWatched = this.isSeasonFullyWatched(season);
-      return [
+      const options = [
         {
           action: fullyWatched ? "markSeasonUnwatched" : "markSeasonWatched",
           label: fullyWatched
@@ -65,11 +67,18 @@ export function createMetaDetailsScreenMethods12() {
             : t("episodes_mark_season_watched", {}, "Mark season as watched")
         }
       ];
+      if (this.getPreviousSeasonEpisodes(season).length) {
+        options.push({ action: "markPreviousSeasonsWatched", label: t("episodes_mark_previous_seasons_watched") });
+      }
+      return options;
     },
     getCurrentLibraryItem() {
       return {
         itemId: this.params?.itemId || this.meta?.id || "",
         itemType: this.params?.itemType || this.meta?.type || "movie",
+        imdbId: resolveMetaImdbId(this.meta, this.params),
+        tmdbId: resolveMetaTmdbId(this.meta, this.params),
+        traktId: resolveMetaTraktId(this.meta, this.params),
         title: this.meta?.name || this.params?.fallbackTitle || this.params?.itemId || "Untitled",
         poster: this.meta?.poster || null,
         background: this.meta?.background || this.meta?.landscapePoster || null,
@@ -101,24 +110,8 @@ export function createMetaDetailsScreenMethods12() {
       return true;
     },
     getLibraryListMenuOptions() {
-      if (!this.libraryListMenu) {
-        return [];
-      }
-      const membership = this.libraryListMenu.membership || {};
-      const tabs = Array.isArray(this.libraryListMenu.tabs) ? this.libraryListMenu.tabs : [];
-      return [
-        ...tabs.map((tab) => ({
-          action: `toggleLibraryList:${tab.key}`,
-          label: tab.title || tab.key,
-          selected: membership[tab.key] === true,
-          className: "poster-list-picker-list-button"
-        })),
-        {
-          action: this.libraryListMenu.destructiveRemovalRequired ? "confirmDestructiveSimklRemoval" : "saveLibraryLists",
-          label: this.libraryListMenu.destructiveRemovalRequired ? "Remove status and clear Simkl history" : t("action_save", {}, "Save"),
-          className: "poster-list-picker-save-button"
-        }
-      ];
+      // One builder for Detail, Home and the poster options menu, as Android shares one picker.
+      return getPosterListPickerOptions(this.libraryListMenu);
     },
     destroyDetailHoldDialog() {
       if (this.detailHoldDialog) {
@@ -286,6 +279,7 @@ export function createMetaDetailsScreenMethods12() {
           key: option.action,
           selected: option.selected,
           className: option.className,
+          checkPlacement: option.checkPlacement,
           onAction: () => {
             void this.activateHeroOptionsMenu(option.action);
           }

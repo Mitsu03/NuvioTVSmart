@@ -1,12 +1,39 @@
+import { MediaServerRepository, isMediaServerBase } from "../mediaserver/mediaServerRepository.js";
 import { safeApiCall } from "../../core/network/safeApiCall.js";
 import { selectCatalogEntries } from "../../core/util/catalogEntryMapper.js";
 import { CatalogApi } from "../remote/api/catalogApi.js";
+import { normalizeTmdbLogoUrl } from "../../core/tmdb/tmdbImageUrl.js";
 import { addonRepository } from "./addonRepository.js";
+
+// Each cached page holds up to a hundred mapped metas. Browsing Discover and
+// paginating rows used to grow the map for the life of the app; keep the most
+// recently used pages only (issue #1250).
+const MAX_CACHED_CATALOG_PAGES = 96;
 
 class CatalogRepository {
   constructor() {
     this.catalogCache = new Map();
     this.cacheGeneration = 0;
+  }
+
+  readCachedCatalog(cacheKey) {
+    const cached = this.catalogCache.get(cacheKey);
+    if (cached === undefined) {
+      return undefined;
+    }
+    // Re-insert so Map iteration order doubles as least-recently-used order.
+    this.catalogCache.delete(cacheKey);
+    this.catalogCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  writeCachedCatalog(cacheKey, row) {
+    this.catalogCache.delete(cacheKey);
+    this.catalogCache.set(cacheKey, row);
+    while (this.catalogCache.size > MAX_CACHED_CATALOG_PAGES) {
+      const oldestKey = this.catalogCache.keys().next().value;
+      this.catalogCache.delete(oldestKey);
+    }
   }
 
   async getCatalog({
@@ -22,6 +49,15 @@ class CatalogRepository {
     supportsSkip = false,
     signal = null
   }) {
+    if (isMediaServerBase(addonBaseUrl))
+      return MediaServerRepository.catalog({
+        addonBaseUrl,
+        catalogId,
+        type,
+        skip,
+        extraArgs,
+        signal
+      });
     const normalizedSkipStep = this.normalizeSkipStep(skipStep);
     const cacheKey = this.buildCacheKey({
       addonBaseUrl,
@@ -34,7 +70,7 @@ class CatalogRepository {
       supportsSkip
     });
 
-    const cached = this.catalogCache.get(cacheKey);
+    const cached = this.readCachedCatalog(cacheKey);
     if (cached) {
       return {
         status: "success",
@@ -79,7 +115,12 @@ class CatalogRepository {
           nextSkip: hasMore ? skip + rawItemCount : skip
         };
 
-        if (cacheGeneration === this.cacheGeneration) this.catalogCache.set(cacheKey, row);
+        // An empty page is usually a transient addon or upstream failure. Keep
+        // it out of the response cache so the next Home request retries it,
+        // matching Android, which has no catalog-response cache.
+        if (cacheGeneration === this.cacheGeneration && items.length) {
+          this.writeCachedCatalog(cacheKey, row);
+        }
         return row;
       })
     );
@@ -158,7 +199,7 @@ class CatalogRepository {
       type: meta.type || "",
       poster: meta.poster || null,
       background: meta.background || null,
-      logo: meta.logo || null,
+      logo: normalizeTmdbLogoUrl(meta.logo) || null,
       description: meta.description || "",
       releaseInfo: meta.releaseInfo || "",
       runtime: meta.runtime ?? null,

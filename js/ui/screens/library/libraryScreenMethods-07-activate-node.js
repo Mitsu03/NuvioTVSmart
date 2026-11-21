@@ -1,3 +1,4 @@
+import { MediaServerRepository } from "../../../data/mediaserver/mediaServerRepository.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./libraryScreen.js";
 
@@ -54,6 +55,19 @@ export function createLibraryScreenMethods07() {
         const state = this.controller.getState();
         this.pendingPickerRestore = state.expandedPicker === picker ? picker : null;
         this.controller.togglePicker(picker);
+        return;
+      }
+      if (action === "openServerLibrary") {
+        const connection = MediaServerRepository.connection(node.dataset.connectionId);
+        const library = connection?.libraries.find((entry) => entry.id === node.dataset.libraryId && entry.selected);
+        if (!connection?.enabled || !library) return;
+        await Router.navigate("catalogSeeAll", {
+          addonBaseUrl: `nuvio-server://${connection.id}`,
+          catalogId: `library-${library.id}`,
+          type: library.kind,
+          catalogName: library.name,
+          addonName: connection.name
+        });
         return;
       }
       if (action === "selectLibraryViewMode") {

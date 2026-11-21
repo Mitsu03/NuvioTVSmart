@@ -44,7 +44,8 @@
 
 .player-platform-webos #videoPlayer::cue {
   font-family: "Roboto", Arial, sans-serif;
-  background-color: transparent !important;
+  /* The setting's background (transparent by default), not the engine's own box. */
+  background-color: var(--player-subtitle-background, transparent) !important;
 }
 
 .player-platform-webos #videoPlayer::-webkit-media-text-track-display-backdrop {
@@ -53,17 +54,10 @@
 
 .player-platform-webos .player-html-subtitles {
   font-family: var(--player-html-subtitle-font-family, "Roboto", Arial, sans-serif);
-  line-height: 1.2;
-}
-
-.player-platform-webos .player-html-subtitle-cue {
-  gap: 0;
 }
 
 .player-platform-webos .player-html-subtitle-line {
-  --player-html-subtitle-padding-block: 0;
   --player-html-subtitle-padding-inline: 0.08em;
-  background-color: transparent !important;
 }
 
 .player-loading-overlay {
@@ -257,7 +251,6 @@
   height: 96px;
   margin-top: -48px;
   margin-left: -48px;
-  color: rgba(255, 255, 255, 0.72);
 }
 
 .player-loading-backdrop {
@@ -464,6 +457,7 @@
 }
 
 .player-controls-overlay.modal-blocked {
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -490,4 +484,77 @@
 .player-controls-overlay.pause-overlay-active .player-control-btn,
 .player-controls-overlay.pause-overlay-active .player-progress-track {
   box-shadow: none;
+}
+
+/*
+ * HDR control dimming (Android HDR OSD dimming): only the player controls and the
+ * menus drawn over the video follow the HDR subtitle brightness. The video and the
+ * subtitle layers stay outside this filter.
+ */
+.player-hdr-dim #playerControlsOverlay,
+.player-hdr-dim #playerPauseOverlay,
+.player-hdr-dim #playerSubtitleDialog,
+.player-hdr-dim #playerSubtitleDelayOverlay,
+.player-hdr-dim #playerSubtitleTimingDialog,
+.player-hdr-dim #playerAudioDialog,
+.player-hdr-dim #playerSpeedDialog,
+.player-hdr-dim #playerSourcesPanel,
+.player-hdr-dim #episodeSidePanel,
+.player-hdr-dim #playerPartyPanel,
+.player-hdr-dim #playerSeekOverlay,
+.player-hdr-dim #playerNextEpisodeCard,
+.player-hdr-dim #playerAspectToast,
+.player-hdr-dim #playerSkipIntro,
+.player-hdr-dim #playerStartupErrorOverlay,
+.player-hdr-dim #playerTorrentOverlay,
+.player-hdr-dim #playerParentalGuide,
+.player-hdr-dim #playerModalBackdrop,
+.player-hdr-dim .player-stream-info-overlay,
+.player-hdr-dim .player-post-play-manual-dialog,
+.player-hdr-dim .player-post-play-synopsis-overlay,
+.player-hdr-dim .nuvio-dialog-backdrop {
+  filter: brightness(var(--player-controls-brightness, 1));
+}
+
+/* ATV: the loading overlay replaces the episodes panel while its source is found. */
+#episodeSidePanel.is-autoplay-searching {
+  visibility: hidden;
+}
+
+/* ATV SubtitleStyleSettings: font, drop shadow and rounded background. */
+.player-html-subtitles {
+  font-family: var(--player-html-subtitle-font-family, inherit);
+}
+
+.player-html-subtitle-text {
+  text-shadow: var(--player-subtitle-drop-shadow, none);
+}
+
+.player-html-subtitle-line {
+  border-radius: var(--player-subtitle-background-radius, 0);
+}
+
+/* ATV StyledSubtitleText: one background block around the widest line, padded
+   10 x 5 units of a 24-unit text, instead of a strip behind each line. */
+.player-html-subtitles-block-background .player-html-subtitle-default {
+  right: auto;
+  left: 50%;
+  width: -webkit-max-content;
+  width: max-content;
+  max-width: 90vw;
+  gap: 0;
+  padding: 0.2083em 0.4167em;
+  border-radius: var(--player-subtitle-background-radius, 0);
+  background: var(--player-subtitle-background);
+  transform: translate(-50%, var(--player-subtitle-offset));
+}
+
+.player-html-subtitles-block-background .player-html-subtitle-default .player-html-subtitle-line {
+  --player-html-subtitle-padding-block: 0;
+  --player-html-subtitle-padding-inline: 0;
+  background: transparent;
+}
+
+#videoPlayer::cue {
+  font-family: var(--player-subtitle-font-family, inherit);
 }

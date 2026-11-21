@@ -1,3 +1,7 @@
+import { LayoutPreferences } from "../../../data/local/layoutPreferences.js";
+import { unchangedHomeRowMarkup } from "./homeDomUpdate.js";
+import { I18n } from "../../../i18n/index.js";
+
 export const MODERN_HOME_CONSTANTS = {
   heroFocusDelayMs: 450,
   heroRapidNavThresholdMs: 130,
@@ -6,6 +10,10 @@ export const MODERN_HOME_CONSTANTS = {
   verticalKeyRepeatThrottleMs: 112,
   trackPaginationIdleMs: 160,
   trackPaginationPrefetchDelayMs: 40,
+  // Constrained rows mount 8 cards, so the load-ahead rule is already true
+  // when focus lands on a row. Wait for focus to rest there before fetching
+  // and appending the next page, or every row crossed on the way pays for it.
+  trackPaginationPrefetchDwellConstrainedMs: 400,
   trackPaginationLoadAheadItems: 4,
   cameraFollowDelayMs: 140,
   cameraFollowDurationXMs: 440,
@@ -13,7 +21,6 @@ export const MODERN_HOME_CONSTANTS = {
   cameraSafetyDurationMs: 180,
   verticalScrollSettlePollMs: 60,
   smartTvLazyHydrationDebounceMs: 240,
-  smartTvTrailerCleanupDelayMs: 900,
   springScrollStiffness: 180,
   springScrollDampingRatio: 0.95,
   rowFocusInset: 40,
@@ -22,6 +29,16 @@ export const MODERN_HOME_CONSTANTS = {
   verticalFastScrollEndTimeoutMs: 160,
   verticalFastScrollMaxFrameMs: 48
 };
+
+export function renderModernHeroBadges(badges = [], escapeHtml) {
+  const visibleBadges = badges.filter(Boolean);
+  if (visibleBadges.length === 2) {
+    return `<span class="home-modern-hero-badge home-modern-hero-badge-combined"><span>${escapeHtml(visibleBadges[0])}</span><span class="home-modern-hero-badge-divider" aria-hidden="true"></span><span>${escapeHtml(visibleBadges[1])}</span></span>`;
+  }
+  return visibleBadges
+    .map((badge) => `<span class="home-modern-hero-badge">${escapeHtml(badge)}</span>`)
+    .join("");
+}
 
 export function renderModernHomeLayout({
   rows = [],
@@ -51,11 +68,24 @@ export function renderModernHomeLayout({
   formatCatalogRowTitle,
   shouldDeferRowImages,
   watchedTitleIds = null,
+  // Home only. A catalog landing re-renders Home once per row: without these
+  // every pass rebuilt and re-parsed every row already on screen (4 s of a
+  // 2025 webOS set's startup). rowMarkupCache: WeakMap of a row's items to its
+  // last markup; mountedRowMarkups: row key to the markup now in the DOM.
+  rowMarkupCache = null,
+  mountedRowMarkups = null,
   escapeHtml,
   escapeAttribute
 } = {}) {
   const catalogSeeAllMap = new Map();
   const sectionsMarkup = [];
+  const domSectionsMarkup = [];
+  const rowMarkups = new Map();
+  const posterSettings = LayoutPreferences.get();
+  // Cached rows hold translated labels (the watched badge), so the locale is part of the key.
+  const posterSettingsKey = rowMarkupCache
+    ? JSON.stringify([posterSettings, I18n.getLocale()])
+    : "";
 
   rows.forEach((rowData, rowIndex) => {
     const isCollectionRow = rowData?.rowKind === "collection";
@@ -100,6 +130,36 @@ export function renderModernHomeLayout({
       typeof shouldDeferRowImages === "function"
         ? shouldDeferRowImages(rowIndex, rowKey, focusedRowKey)
         : false;
+    const escapedRowKey = escapeHtml(rowKey);
+    // Everything a row's markup is built from; the items themselves are
+    // covered by the identity of their array, which a refresh replaces.
+    const cacheKey = [
+      rowKey,
+      rowIndex,
+      visibleItems.length,
+      rowTitle,
+      rowData.type,
+      rowData.addonBaseUrl,
+      rowData.addonId,
+      rowData.addonName,
+      Boolean(rowData.suppressPosterText),
+      showPosterLabels,
+      preferLandscapePosters,
+      deferRowImages,
+      expandFocusedPoster && focusedRowKey === rowKey ? focusedItemIndex : -1,
+      posterSettingsKey
+    ].join("\u0000");
+    const cached = rowMarkupCache && !isCollectionRow ? rowMarkupCache.get(rowItems) : null;
+    if (cached && cached.key === cacheKey && cached.watchedTitleIds === watchedTitleIds) {
+      sectionsMarkup.push(cached.markup);
+      domSectionsMarkup.push(
+        mountedRowMarkups?.get(escapedRowKey) === cached.markup
+          ? unchangedHomeRowMarkup(escapedRowKey)
+          : cached.markup
+      );
+      rowMarkups.set(escapedRowKey, cached.markup);
+      return;
+    }
     const cardsMarkup = visibleItems
       .map((item, itemIndex) =>
         createPosterCardMarkup(
@@ -113,12 +173,13 @@ export function renderModernHomeLayout({
           expandFocusedPoster && focusedRowKey === rowKey && focusedItemIndex === itemIndex,
           preferLandscapePosters,
           deferRowImages,
-          watchedTitleIds
+          watchedTitleIds,
+          posterSettings
         )
       )
       .join("");
 
-    sectionsMarkup.push(`
+    const sectionMarkup = `
       <section class="home-row home-modern-row home-row-enter" data-row-key="${escapeHtml(rowKey)}" data-row-index="${rowIndex}">
         <div class="home-row-head">
           <h2 class="home-row-title">${escapeHtml(rowTitle)}</h2>
@@ -127,12 +188,20 @@ export function renderModernHomeLayout({
           ${cardsMarkup}
         </div>
       </section>
-    `);
+    `;
+    sectionsMarkup.push(sectionMarkup);
+    domSectionsMarkup.push(
+      mountedRowMarkups?.get(escapedRowKey) === sectionMarkup
+        ? unchangedHomeRowMarkup(escapedRowKey)
+        : sectionMarkup
+    );
+    rowMarkups.set(escapedRowKey, sectionMarkup);
+    if (rowMarkupCache && !isCollectionRow) {
+      rowMarkupCache.set(rowItems, { key: cacheKey, watchedTitleIds, markup: sectionMarkup });
+    }
   });
 
-  return {
-    catalogSeeAllMap,
-    markup: `
+  const stageMarkup = (catalogSections) => `
       <section class="home-modern-stage">
         ${
           showHeroSection
@@ -157,7 +226,8 @@ export function renderModernHomeLayout({
               itemLimit: continueWatchingRenderLimit,
               useEpisodeThumbnails: useEpisodeThumbnailsInCw,
               blurNextUp: blurContinueWatchingNextUp,
-              cardStyle: continueWatchingCardStyle
+              cardStyle: continueWatchingCardStyle,
+              posterSettings
             })}
             ${renderContinueWatchingSection(upcomingItems, {
               rowKey: "upcoming_section",
@@ -167,15 +237,23 @@ export function renderModernHomeLayout({
               itemLimit: upcomingItems.length,
               useEpisodeThumbnails: useEpisodeThumbnailsInCw,
               blurNextUp: blurContinueWatchingNextUp,
-              cardStyle: continueWatchingCardStyle
+              cardStyle: continueWatchingCardStyle,
+              posterSettings
             })}
             <div class="home-modern-catalogs">
-              ${sectionsMarkup.join("")}
+              ${catalogSections}
             </div>
           </div>
         </div>
       </section>
-    `
+    `;
+  const [beforeCatalogs, afterCatalogs] = stageMarkup("\u0000").split("\u0000");
+  return {
+    catalogSeeAllMap,
+    rowMarkups,
+    markup: beforeCatalogs + sectionsMarkup.join("") + afterCatalogs,
+    // Same page with the rows already mounted left out, for the in-place update.
+    domMarkup: beforeCatalogs + domSectionsMarkup.join("") + afterCatalogs
   };
 }
 
@@ -239,9 +317,7 @@ function renderModernHeroMarkup({
   if (!display) {
     return "";
   }
-  const primaryLeft = display.leadingMeta
-    .map((token) => `<span>${escapeHtml(token)}</span>`)
-    .join('<span class="home-hero-dot">•</span>');
+  const primaryLeft = escapeHtml(display.leadingMeta.filter(Boolean).join(" • "));
   const primaryRightParts = display.trailingMeta.map(
     (token) => `<span>${escapeHtml(token)}</span>`
   );
@@ -260,9 +336,9 @@ function renderModernHeroMarkup({
       `<span class="home-modern-hero-highlight">${escapeHtml(display.secondaryHighlightText)}</span>`
     );
   }
-  display.badges.forEach((badge) => {
-    secondaryParts.push(`<span class="home-modern-hero-badge">${escapeHtml(badge)}</span>`);
-  });
+  if (display.badges.length) {
+    secondaryParts.push(renderModernHeroBadges(display.badges, escapeHtml));
+  }
   if (display.showImdbSecondary) {
     secondaryParts.push(`
       <span class="home-hero-imdb">
@@ -276,6 +352,7 @@ function renderModernHeroMarkup({
       `<span class="home-modern-hero-secondary-detail">${escapeHtml(display.languageText)}</span>`
     );
   }
+  if (display.mdbListMarkup) secondaryParts.push(display.mdbListMarkup);
   return `
     <section class="home-hero home-hero-modern">
       <article class="home-hero-card home-modern-hero-card${heroItem?.heroMetaEnriching ? " is-hero-meta-enriching" : ""}"
@@ -288,7 +365,7 @@ function renderModernHeroMarkup({
             typeof renderHeroBackdropImage === "function"
               ? renderHeroBackdropImage(display)
               : display.backdrop
-                ? `<img class="home-hero-backdrop" src="${escapeAttribute(display.backdrop)}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" />`
+                ? `<img class="home-hero-backdrop" src="${escapeAttribute(display.backdrop)}" alt="" decoding="async" fetchpriority="high" />`
                 : '<div class="home-hero-backdrop placeholder"></div>'
           }
           </div>
@@ -308,7 +385,7 @@ function renderModernHeroMarkup({
               ${primaryRightParts.join('<span class="home-hero-dot">•</span>')}
             </div>
           </div>
-          <div class="home-modern-hero-secondary${display.secondaryHighlightText || display.badges.length || display.showImdbSecondary || display.languageText ? "" : " is-empty"}">
+          <div class="home-modern-hero-secondary${display.secondaryHighlightText || display.badges.length || display.showImdbSecondary || display.languageText || display.mdbListMarkup ? "" : " is-empty"}">
             ${secondaryParts.join('<span class="home-hero-dot">•</span>')}
           </div>
           <p class="home-hero-description${display.description ? "" : " is-empty"}">${escapeHtml(display.description)}</p>

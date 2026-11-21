@@ -8,6 +8,7 @@ export function createSearchScreenMethods04() {
     getRootSidebarNodes,
     getRootSidebarSelectedNode,
     isRootSidebarNode,
+    isPerformanceConstrainedRuntime,
     setModernSidebarExpanded,
     setLegacySidebarExpanded,
     escapeSelectorValue
@@ -92,6 +93,12 @@ export function createSearchScreenMethods04() {
       });
       target.classList.add("focused");
       focusWithoutAutoScroll(target);
+      // Android: whichever of voice/text field was focused last is where Up from results returns.
+      if (target.id === "searchInput") {
+        this.lastSearchInputWasVoice = false;
+      } else if (target.classList.contains("search-voice-btn")) {
+        this.lastSearchInputWasVoice = true;
+      }
       const zone = String(target.dataset.navZone || "");
       const currentZone = String(current?.dataset?.navZone || "");
       const sidebarFocused = isRootSidebarNode(target);
@@ -128,6 +135,9 @@ export function createSearchScreenMethods04() {
         springMap.set(container, springState);
       }
     },
+    shouldUseImmediateFocusScroll() {
+      return isPerformanceConstrainedRuntime();
+    },
     animateScroll(container, axis, targetValue, duration = 150, options = {}) {
       if (!container) {
         return;
@@ -142,6 +152,11 @@ export function createSearchScreenMethods04() {
           ? Math.max(0, container.scrollHeight - container.clientHeight)
           : Math.max(0, container.scrollWidth - container.clientWidth);
       const nextValue = Math.max(0, Math.min(max, Math.round(targetValue)));
+      if (this.shouldUseImmediateFocusScroll()) {
+        this.cancelScrollAnimation(container, axis);
+        container[property] = nextValue;
+        return;
+      }
       const startValue = Number(container[property] || 0);
       if (Math.abs(startValue - nextValue) <= 1) {
         container[property] = nextValue;
@@ -188,6 +203,11 @@ export function createSearchScreenMethods04() {
           ? Math.max(0, container.scrollHeight - container.clientHeight)
           : Math.max(0, container.scrollWidth - container.clientWidth);
       const nextValue = Math.max(0, Math.min(max, Math.round(targetValue)));
+      if (this.shouldUseImmediateFocusScroll()) {
+        this.cancelScrollAnimation(container, axis);
+        container[property] = nextValue;
+        return;
+      }
       const prefersReducedMotion = globalThis?.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
       if (prefersReducedMotion) {
         container[property] = nextValue;

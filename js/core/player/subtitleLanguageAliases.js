@@ -1,3 +1,31 @@
+const OPENSUBTITLES_SPANISH_ALIASES = Object.freeze({
+  spn: "es",
+  sp: "es",
+  esp: "es",
+  spl: "es-419"
+});
+
+export function normalizeOpenSubtitlesSpanishCode(value) {
+  const code = String(value || "")
+    .trim()
+    .toLowerCase();
+  return Object.prototype.hasOwnProperty.call(OPENSUBTITLES_SPANISH_ALIASES, code)
+    ? OPENSUBTITLES_SPANISH_ALIASES[code]
+    : "";
+}
+
+export function normalizeHbsLanguageAlias(value, aliases = { bos: "bs", hrv: "hr", srp: "sr" }) {
+  const tokenized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-_./]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!tokenized.startsWith("hbs")) return "";
+  const language = tokenized.slice(3).trim();
+  return Object.prototype.hasOwnProperty.call(aliases, language) ? aliases[language] : "";
+}
+
 const LANGUAGE_CODE_ALIASES = Object.freeze({
   id: "id",
   in: "id",
@@ -36,6 +64,9 @@ export function normalizeSubtitleLanguageAlias(value) {
   if (!raw) {
     return "";
   }
+
+  const providerCode = normalizeOpenSubtitlesSpanishCode(raw) || normalizeHbsLanguageAlias(raw);
+  if (providerCode) return providerCode;
 
   const text = normalizeLanguageText(raw);
   if (

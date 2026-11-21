@@ -52,9 +52,7 @@ export function createPlayerScreenMethods68() {
         }
 
         const subtitleSettings = PlayerSettingsStore.get();
-        const preferredOnly =
-          subtitleSettings.addonSubtitleStartupMode === "PREFERRED_ONLY" ||
-          (subtitleSettings.addonSubtitleStartupMode === "ALL_SUBTITLES" && subtitleSettings.subtitleStyle?.showOnlyPreferredLanguages);
+        const preferredOnly = Boolean(subtitleSettings.subtitleStyle?.showOnlyPreferredLanguages);
         if (preferredOnly) {
           const preferredTargets = new Set(this.getStartupPreferredSubtitleLanguageTargets());
           repositorySubtitles = repositorySubtitles.filter((entry) => {
@@ -214,13 +212,27 @@ export function createPlayerScreenMethods68() {
         return;
       }
 
+      if (action === "chapters") {
+        this.toggleChaptersPanel();
+        return;
+      }
+
+      if (action === "party") {
+        this.togglePartyPanel();
+        return;
+      }
+
+      if (action === "streamInfo") {
+        this.showStreamInfo();
+        return;
+      }
       if (action === "more") {
         this.stickyProgressFocus = false;
         this.moreActionsVisible = true;
         this.controlFocusZone = "buttons";
         this.controlFocusIndex = Math.max(
           0,
-          this.getControlDefinitions().findIndex((entry) => entry.action === "speed")
+          this.getControlDefinitions().findIndex((entry) => entry.action === "speed" || entry.action === "aspect")
         );
         this.renderControlButtons();
         return;
@@ -230,10 +242,7 @@ export function createPlayerScreenMethods68() {
         this.stickyProgressFocus = false;
         this.moreActionsVisible = false;
         this.controlFocusZone = "buttons";
-        this.controlFocusIndex = Math.max(
-          0,
-          this.getControlDefinitions().findIndex((entry) => entry.action === "more")
-        );
+        this.controlFocusIndex = 0;
         this.renderControlButtons();
         return;
       }

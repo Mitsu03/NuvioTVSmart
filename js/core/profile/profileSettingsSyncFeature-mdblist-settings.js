@@ -1,3 +1,4 @@
+import { normalizeMdbListRatingOrder } from "../../data/local/mdbListSettingsStore.js";
 import { LocalStore } from "../storage/localStore.js";
 
 import { AuthManager } from "../auth/authManager.js";
@@ -97,6 +98,8 @@ export const mdblist_settings = {
     const settings = MdbListSettingsStore.getForProfile(profileId);
     return {
       mdblist_enabled: Boolean(settings.enabled),
+      mdblist_show_on_hero: Boolean(settings.showOnHero),
+      mdblist_rating_order: settings.ratingOrder.join(","),
       mdblist_api_key: String(settings.apiKey || "").trim(),
       mdblist_show_trakt: settings.showTrakt !== false,
       mdblist_show_imdb: settings.showImdb !== false,
@@ -111,6 +114,7 @@ export const mdblist_settings = {
   project(rawFeature = {}) {
     const raw = normalizeFeaturePayload(rawFeature);
     const projected = {};
+    if (raw.mdblist_rating_order != null) projected.mdblist_rating_order = normalizeMdbListRatingOrder(raw.mdblist_rating_order).join(",");
     if (booleanOrNull(raw.mdblist_enabled) != null) {
       projected.mdblist_enabled = Boolean(raw.mdblist_enabled);
     }
@@ -118,6 +122,7 @@ export const mdblist_settings = {
       projected.mdblist_api_key = String(raw.mdblist_api_key || "").trim();
     }
     [
+      "mdblist_show_on_hero",
       "mdblist_show_trakt",
       "mdblist_show_imdb",
       "mdblist_show_tmdb",
@@ -136,6 +141,8 @@ export const mdblist_settings = {
   import(profileId, rawFeature = {}) {
     const raw = normalizeFeaturePayload(rawFeature);
     const partial = {};
+    if (booleanOrNull(raw.mdblist_show_on_hero) != null) partial.showOnHero = Boolean(raw.mdblist_show_on_hero);
+    if (raw.mdblist_rating_order != null) partial.ratingOrder = normalizeMdbListRatingOrder(raw.mdblist_rating_order);
     if (booleanOrNull(raw.mdblist_enabled) != null) {
       partial.enabled = Boolean(raw.mdblist_enabled);
     }

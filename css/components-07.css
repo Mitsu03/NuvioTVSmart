@@ -1,24 +1,490 @@
-.nuvio-loading-indicator-spoke:nth-child(10) {
-  transform: rotate(270deg);
-  animation-delay: -250ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(11) {
-  transform: rotate(300deg);
-  animation-delay: -166.667ms;
-}
-
-.nuvio-loading-indicator-spoke:nth-child(12) {
-  transform: rotate(330deg);
-  animation-delay: -83.333ms;
-}
-
-@keyframes nuvioLoadingIndicatorFade {
-  from {
-    opacity: 1;
+/* Android LoadingIndicator: 350-unit canvas, 0.75 scale, radius 150,
+   stroke 50, rounded caps, 60-frame / 2000ms cycle and cubic(0.333,0,0.667,1).
+   Half-frame samples preserve the easing on CSS-only TV renderers. */
+@keyframes nuvioLoadingIndicatorArc {
+  0.000000% {
+    stroke-dasharray: 7.068583 699.789764;
+    stroke-dashoffset: 176.714587;
   }
-  to {
-    opacity: 0;
+  0.833333% {
+    stroke-dasharray: 7.277525 699.580822;
+    stroke-dashoffset: 170.775013;
+  }
+  1.666667% {
+    stroke-dasharray: 7.898685 698.959662;
+    stroke-dashoffset: 164.83544;
+  }
+  2.500000% {
+    stroke-dasharray: 8.923574 697.934773;
+    stroke-dashoffset: 158.895866;
+  }
+  3.333333% {
+    stroke-dasharray: 10.343704 696.514643;
+    stroke-dashoffset: 152.956292;
+  }
+  4.166667% {
+    stroke-dasharray: 12.150595 694.707752;
+    stroke-dashoffset: 147.016719;
+  }
+  5.000000% {
+    stroke-dasharray: 14.335769 692.522578;
+    stroke-dashoffset: 141.077145;
+  }
+  5.833333% {
+    stroke-dasharray: 16.890755 689.967592;
+    stroke-dashoffset: 135.137571;
+  }
+  6.666667% {
+    stroke-dasharray: 19.807085 687.051262;
+    stroke-dashoffset: 129.197998;
+  }
+  7.500000% {
+    stroke-dasharray: 23.076295 683.782052;
+    stroke-dashoffset: 123.258424;
+  }
+  8.333333% {
+    stroke-dasharray: 26.689926 680.168421;
+    stroke-dashoffset: 117.318851;
+  }
+  9.166667% {
+    stroke-dasharray: 30.639523 676.218824;
+    stroke-dashoffset: 111.379277;
+  }
+  10.000000% {
+    stroke-dasharray: 34.916636 671.941711;
+    stroke-dashoffset: 105.439703;
+  }
+  10.833333% {
+    stroke-dasharray: 39.512816 667.345531;
+    stroke-dashoffset: 99.50013;
+  }
+  11.666667% {
+    stroke-dasharray: 44.419622 662.438725;
+    stroke-dashoffset: 93.560556;
+  }
+  12.500000% {
+    stroke-dasharray: 49.628614 657.229733;
+    stroke-dashoffset: 87.620983;
+  }
+  13.333333% {
+    stroke-dasharray: 55.131355 651.726992;
+    stroke-dashoffset: 81.681409;
+  }
+  14.166667% {
+    stroke-dasharray: 60.919414 645.938933;
+    stroke-dashoffset: 75.741835;
+  }
+  15.000000% {
+    stroke-dasharray: 66.984362 639.873985;
+    stroke-dashoffset: 69.802262;
+  }
+  15.833333% {
+    stroke-dasharray: 73.317773 633.540574;
+    stroke-dashoffset: 63.862688;
+  }
+  16.666667% {
+    stroke-dasharray: 79.911226 626.947121;
+    stroke-dashoffset: 57.923115;
+  }
+  17.500000% {
+    stroke-dasharray: 86.547359 620.310988;
+    stroke-dashoffset: 51.7746;
+  }
+  18.333333% {
+    stroke-dasharray: 93.014479 613.843868;
+    stroke-dashoffset: 45.213866;
+  }
+  19.166667% {
+    stroke-dasharray: 99.312664 607.545683;
+    stroke-dashoffset: 38.249404;
+  }
+  20.000000% {
+    stroke-dasharray: 105.441989 601.416358;
+    stroke-dashoffset: 30.8897;
+  }
+  20.833333% {
+    stroke-dasharray: 111.402529 595.455818;
+    stroke-dashoffset: 23.143235;
+  }
+  21.666667% {
+    stroke-dasharray: 117.194354 589.663993;
+    stroke-dashoffset: 15.018487;
+  }
+  22.500000% {
+    stroke-dasharray: 122.817536 584.040811;
+    stroke-dashoffset: 6.523927;
+  }
+  23.333333% {
+    stroke-dasharray: 128.272141 578.586206;
+    stroke-dashoffset: -2.331976;
+  }
+  24.166667% {
+    stroke-dasharray: 133.558235 573.300112;
+    stroke-dashoffset: -11.540759;
+  }
+  25.000000% {
+    stroke-dasharray: 138.675882 568.182465;
+    stroke-dashoffset: -21.093964;
+  }
+  25.833333% {
+    stroke-dasharray: 143.625144 563.233203;
+    stroke-dashoffset: -30.983135;
+  }
+  26.666667% {
+    stroke-dasharray: 148.406079 558.452268;
+    stroke-dashoffset: -41.199821;
+  }
+  27.500000% {
+    stroke-dasharray: 153.018745 553.839602;
+    stroke-dashoffset: -51.735575;
+  }
+  28.333333% {
+    stroke-dasharray: 157.463198 549.395149;
+    stroke-dashoffset: -62.581955;
+  }
+  29.166667% {
+    stroke-dasharray: 161.739492 545.118855;
+    stroke-dashoffset: -73.73052;
+  }
+  30.000000% {
+    stroke-dasharray: 165.847676 541.010671;
+    stroke-dashoffset: -85.172835;
+  }
+  30.833333% {
+    stroke-dasharray: 169.787802 537.070545;
+    stroke-dashoffset: -96.900467;
+  }
+  31.666667% {
+    stroke-dasharray: 173.559916 533.298431;
+    stroke-dashoffset: -108.904989;
+  }
+  32.500000% {
+    stroke-dasharray: 177.164063 529.694284;
+    stroke-dashoffset: -121.177974;
+  }
+  33.333333% {
+    stroke-dasharray: 180.600287 526.25806;
+    stroke-dashoffset: -133.711;
+  }
+  34.166667% {
+    stroke-dasharray: 183.868629 522.989718;
+    stroke-dashoffset: -146.495648;
+  }
+  35.000000% {
+    stroke-dasharray: 186.969128 519.889219;
+    stroke-dashoffset: -159.523502;
+  }
+  35.833333% {
+    stroke-dasharray: 189.901822 516.956525;
+    stroke-dashoffset: -172.786149;
+  }
+  36.666667% {
+    stroke-dasharray: 192.666745 514.191602;
+    stroke-dashoffset: -186.275178;
+  }
+  37.500000% {
+    stroke-dasharray: 195.263931 511.594416;
+    stroke-dashoffset: -199.982182;
+  }
+  38.333333% {
+    stroke-dasharray: 197.693412 509.164935;
+    stroke-dashoffset: -213.898756;
+  }
+  39.166667% {
+    stroke-dasharray: 199.955215 506.903132;
+    stroke-dashoffset: -228.016497;
+  }
+  40.000000% {
+    stroke-dasharray: 202.049368 504.808979;
+    stroke-dashoffset: -242.327006;
+  }
+  40.833333% {
+    stroke-dasharray: 203.975897 502.88245;
+    stroke-dashoffset: -256.821883;
+  }
+  41.666667% {
+    stroke-dasharray: 205.734824 501.123523;
+    stroke-dashoffset: -271.492735;
+  }
+  42.500000% {
+    stroke-dasharray: 207.326171 499.532176;
+    stroke-dashoffset: -286.331167;
+  }
+  43.333333% {
+    stroke-dasharray: 208.749956 498.108391;
+    stroke-dashoffset: -301.328789;
+  }
+  44.166667% {
+    stroke-dasharray: 210.006197 496.85215;
+    stroke-dashoffset: -316.477209;
+  }
+  45.000000% {
+    stroke-dasharray: 211.094909 495.763438;
+    stroke-dashoffset: -331.768042;
+  }
+  45.833333% {
+    stroke-dasharray: 212.016104 494.842243;
+    stroke-dashoffset: -347.1929;
+  }
+  46.666667% {
+    stroke-dasharray: 212.769795 494.088552;
+    stroke-dashoffset: -362.7434;
+  }
+  47.500000% {
+    stroke-dasharray: 213.355989 493.502358;
+    stroke-dashoffset: -378.411158;
+  }
+  48.333333% {
+    stroke-dasharray: 213.774694 493.083653;
+    stroke-dashoffset: -394.187794;
+  }
+  49.166667% {
+    stroke-dasharray: 214.025915 492.832432;
+    stroke-dashoffset: -410.064926;
+  }
+  50.000000% {
+    stroke-dasharray: 214.109655 492.748692;
+    stroke-dashoffset: -426.034176;
+  }
+  50.833333% {
+    stroke-dasharray: 214.025915 492.832432;
+    stroke-dashoffset: -442.087166;
+  }
+  51.666667% {
+    stroke-dasharray: 213.774694 493.083653;
+    stroke-dashoffset: -458.215519;
+  }
+  52.500000% {
+    stroke-dasharray: 213.355989 493.502358;
+    stroke-dashoffset: -474.41086;
+  }
+  53.333333% {
+    stroke-dasharray: 212.769795 494.088552;
+    stroke-dashoffset: -490.664812;
+  }
+  54.166667% {
+    stroke-dasharray: 212.016104 494.842243;
+    stroke-dashoffset: -506.969002;
+  }
+  55.000000% {
+    stroke-dasharray: 211.094909 495.763438;
+    stroke-dashoffset: -523.315056;
+  }
+  55.833333% {
+    stroke-dasharray: 210.006197 496.85215;
+    stroke-dashoffset: -539.694601;
+  }
+  56.666667% {
+    stroke-dasharray: 208.749956 498.108391;
+    stroke-dashoffset: -556.099262;
+  }
+  57.500000% {
+    stroke-dasharray: 207.326171 499.532176;
+    stroke-dashoffset: -572.520669;
+  }
+  58.333333% {
+    stroke-dasharray: 205.734824 501.123523;
+    stroke-dashoffset: -588.950448;
+  }
+  59.166667% {
+    stroke-dasharray: 203.975897 502.88245;
+    stroke-dashoffset: -605.380227;
+  }
+  60.000000% {
+    stroke-dasharray: 202.049368 504.808979;
+    stroke-dashoffset: -621.801633;
+  }
+  60.833333% {
+    stroke-dasharray: 199.955215 506.903132;
+    stroke-dashoffset: -638.206295;
+  }
+  61.666667% {
+    stroke-dasharray: 197.693412 509.164935;
+    stroke-dashoffset: -654.585839;
+  }
+  62.500000% {
+    stroke-dasharray: 195.263931 511.594416;
+    stroke-dashoffset: -670.931893;
+  }
+  63.333333% {
+    stroke-dasharray: 192.666745 514.191602;
+    stroke-dashoffset: -687.236083;
+  }
+  64.166667% {
+    stroke-dasharray: 189.901822 516.956525;
+    stroke-dashoffset: -703.490036;
+  }
+  65.000000% {
+    stroke-dasharray: 186.969128 519.889219;
+    stroke-dashoffset: -719.685376;
+  }
+  65.833333% {
+    stroke-dasharray: 183.868629 522.989718;
+    stroke-dashoffset: -735.81373;
+  }
+  66.666667% {
+    stroke-dasharray: 180.600287 526.25806;
+    stroke-dashoffset: -751.86672;
+  }
+  67.500000% {
+    stroke-dasharray: 177.164063 529.694284;
+    stroke-dashoffset: -767.83597;
+  }
+  68.333333% {
+    stroke-dasharray: 173.559916 533.298431;
+    stroke-dashoffset: -783.713102;
+  }
+  69.166667% {
+    stroke-dasharray: 169.787802 537.070545;
+    stroke-dashoffset: -799.489737;
+  }
+  70.000000% {
+    stroke-dasharray: 165.847676 541.010671;
+    stroke-dashoffset: -815.157496;
+  }
+  70.833333% {
+    stroke-dasharray: 161.739492 545.118855;
+    stroke-dashoffset: -830.707995;
+  }
+  71.666667% {
+    stroke-dasharray: 157.463198 549.395149;
+    stroke-dashoffset: -846.132854;
+  }
+  72.500000% {
+    stroke-dasharray: 153.018745 553.839602;
+    stroke-dashoffset: -861.423686;
+  }
+  73.333333% {
+    stroke-dasharray: 148.406079 558.452268;
+    stroke-dashoffset: -876.572107;
+  }
+  74.166667% {
+    stroke-dasharray: 143.625144 563.233203;
+    stroke-dashoffset: -891.569728;
+  }
+  75.000000% {
+    stroke-dasharray: 138.675882 568.182465;
+    stroke-dashoffset: -906.40816;
+  }
+  75.833333% {
+    stroke-dasharray: 133.558235 573.300112;
+    stroke-dashoffset: -921.079012;
+  }
+  76.666667% {
+    stroke-dasharray: 128.272141 578.586206;
+    stroke-dashoffset: -935.57389;
+  }
+  77.500000% {
+    stroke-dasharray: 122.817536 584.040811;
+    stroke-dashoffset: -949.884398;
+  }
+  78.333333% {
+    stroke-dasharray: 117.194354 589.663993;
+    stroke-dashoffset: -964.002139;
+  }
+  79.166667% {
+    stroke-dasharray: 111.402529 595.455818;
+    stroke-dashoffset: -977.918713;
+  }
+  80.000000% {
+    stroke-dasharray: 105.441989 601.416358;
+    stroke-dashoffset: -991.625717;
+  }
+  80.833333% {
+    stroke-dasharray: 99.312664 607.545683;
+    stroke-dashoffset: -1005.114747;
+  }
+  81.666667% {
+    stroke-dasharray: 93.014479 613.843868;
+    stroke-dashoffset: -1018.377394;
+  }
+  82.500000% {
+    stroke-dasharray: 86.547359 620.310988;
+    stroke-dashoffset: -1031.405248;
+  }
+  83.333333% {
+    stroke-dasharray: 79.911226 626.947121;
+    stroke-dashoffset: -1044.189896;
+  }
+  84.166667% {
+    stroke-dasharray: 73.317773 633.540574;
+    stroke-dashoffset: -1056.722922;
+  }
+  85.000000% {
+    stroke-dasharray: 66.984362 639.873985;
+    stroke-dashoffset: -1068.995907;
+  }
+  85.833333% {
+    stroke-dasharray: 60.919414 645.938933;
+    stroke-dashoffset: -1081.000428;
+  }
+  86.666667% {
+    stroke-dasharray: 55.131355 651.726992;
+    stroke-dashoffset: -1092.728061;
+  }
+  87.500000% {
+    stroke-dasharray: 49.628614 657.229733;
+    stroke-dashoffset: -1104.170376;
+  }
+  88.333333% {
+    stroke-dasharray: 44.419622 662.438725;
+    stroke-dashoffset: -1115.318941;
+  }
+  89.166667% {
+    stroke-dasharray: 39.512816 667.345531;
+    stroke-dashoffset: -1126.16532;
+  }
+  90.000000% {
+    stroke-dasharray: 34.916636 671.941711;
+    stroke-dashoffset: -1136.701075;
+  }
+  90.833333% {
+    stroke-dasharray: 30.639523 676.218824;
+    stroke-dashoffset: -1146.917761;
+  }
+  91.666667% {
+    stroke-dasharray: 26.689926 680.168421;
+    stroke-dashoffset: -1156.806932;
+  }
+  92.500000% {
+    stroke-dasharray: 23.076295 683.782052;
+    stroke-dashoffset: -1166.360136;
+  }
+  93.333333% {
+    stroke-dasharray: 19.807085 687.051262;
+    stroke-dashoffset: -1175.56892;
+  }
+  94.166667% {
+    stroke-dasharray: 16.890755 689.967592;
+    stroke-dashoffset: -1184.424823;
+  }
+  95.000000% {
+    stroke-dasharray: 14.335769 692.522578;
+    stroke-dashoffset: -1192.919383;
+  }
+  95.833333% {
+    stroke-dasharray: 12.150595 694.707752;
+    stroke-dashoffset: -1201.044131;
+  }
+  96.666667% {
+    stroke-dasharray: 10.343704 696.514643;
+    stroke-dashoffset: -1208.790595;
+  }
+  97.500000% {
+    stroke-dasharray: 8.923574 697.934773;
+    stroke-dashoffset: -1216.150299;
+  }
+  98.333333% {
+    stroke-dasharray: 7.898685 698.959662;
+    stroke-dashoffset: -1223.114761;
+  }
+  99.166667% {
+    stroke-dasharray: 7.277525 699.580822;
+    stroke-dashoffset: -1229.675495;
+  }
+  100.000000% {
+    stroke-dasharray: 7.068583 699.789764;
+    stroke-dashoffset: -1235.82401;
   }
 }
 
@@ -60,10 +526,10 @@
   --legacy-sidebar-focus-scale: 1.1;
   /* ATV collapsedWidth 184dp -> 368px */
   --modern-sidebar-collapsed-width: 368px;
-  /* ATV expandedWidth 262dp -> 524px */
-  --modern-sidebar-open-width: 524px;
-  /* ATV expandedWidth minus start/end padding 262dp - 14dp - 8dp -> 480px */
-  --modern-sidebar-surface-width: 480px;
+  /* ATV expandedWidth 230dp -> 460px */
+  --modern-sidebar-open-width: 460px;
+  /* ATV expandedWidth minus start/end padding 230dp - 14dp - 8dp -> 416px */
+  --modern-sidebar-surface-width: 416px;
   /* ATV sidebar panel top/start/bottom 16dp/14dp/12dp -> 32px/28px/24px */
   --modern-sidebar-surface-top: 32px;
   --modern-sidebar-surface-left: 28px;
@@ -104,6 +570,16 @@
   display: none !important;
   z-index: -1;
   transform: translateX(-200vw) !important;
+}
+
+/* content-visibility keeps the hidden Home's layout cached, so a Back return no
+   longer relayouts every row (about 1 s on webOS), and its skipped contents are
+   never painted or composited. Tizen keeps display:none until verified there. */
+@supports (content-visibility: hidden) {
+  :root:not(.tizen-tv) #home.home-dom-preserved {
+    display: block !important;
+    content-visibility: hidden;
+  }
 }
 
 #home.home-dom-preserved .root-sidebar-legacy,
@@ -220,7 +696,7 @@
   transform: scale(1);
   transform-origin: center center;
   transition:
-    transform 430ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 180ms cubic-bezier(0.4, 0, 0.2, 1),
     background-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
     color 180ms cubic-bezier(0.4, 0, 0.2, 1),
     padding 350ms cubic-bezier(0.4, 0, 0.2, 1),
@@ -239,7 +715,7 @@
 
 .home-sidebar.opening .home-nav-item {
   transition:
-    transform 430ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 180ms cubic-bezier(0.4, 0, 0.2, 1),
     background-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
     color 180ms cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -290,11 +766,11 @@
     width 350ms cubic-bezier(0.4, 0, 0.2, 1),
     transform 350ms cubic-bezier(0.4, 0, 0.2, 1);
   font-family: inherit;
-  /* ATV titleLarge 20sp / 28sp -> 40px / 56px */
-  font-size: min(2.08vw, 40px);
-  font-weight: inherit;
-  line-height: min(2.92vw, 56px);
-  letter-spacing: 0;
+  /* ATV bodyLarge 16sp / 24sp -> 32px / 48px */
+  font-size: min(1.67vw, 32px);
+  font-weight: 400;
+  line-height: min(2.5vw, 48px);
+  letter-spacing: 1px;
 }
 
 .home-sidebar.content-expanded .home-nav-label {

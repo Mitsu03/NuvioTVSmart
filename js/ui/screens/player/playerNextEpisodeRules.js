@@ -1,3 +1,8 @@
+import {
+  END_OF_VIDEO_EPSILON_SECONDS,
+  findFollowingPostCreditsScene
+} from "../../../core/player/skipIntervalRules.js";
+
 const VALID_NEXT_EPISODE_THRESHOLD_MODES = new Set(["PERCENTAGE", "MINUTES_BEFORE_END"]);
 const OUTRO_SEGMENT_TYPES = new Set(["outro", "ed", "mixed-ed"]);
 const ISO_DATE_PATTERN = /\b\d{4}-\d{2}-\d{2}\b/;
@@ -74,6 +79,7 @@ function getOutroSegments(skipIntervals = []) {
         Number.isFinite(Number(interval?.startTime)) && Number.isFinite(Number(interval?.endTime))
     )
     .map((interval) => ({
+      ...interval,
       startTime: Number(interval.startTime),
       endTime: Number(interval.endTime)
     }));
@@ -93,6 +99,8 @@ function shouldShowNextEpisodeCard({
     return false;
   }
 
+  if (position > duration + END_OF_VIDEO_EPSILON_SECONDS) return false;
+
   const outroSegments = getOutroSegments(skipIntervals);
   if (outroSegments.length) {
     const latestOutroEndSeconds = Math.max(...outroSegments.map((interval) => interval.endTime));
@@ -102,6 +110,20 @@ function shouldShowNextEpisodeCard({
       mode === "MINUTES_BEFORE_END"
         ? normalizeThresholdMinutesBeforeEnd(thresholdMinutesBeforeEnd) * 60
         : ((100 - normalizeThresholdPercent(thresholdPercent)) / 100) * duration;
+
+    const latestOutro = outroSegments.reduce((latest, interval) =>
+      interval.endTime > latest.endTime ? interval : latest
+    );
+    const scene = findFollowingPostCreditsScene(latestOutro, skipIntervals, duration);
+    if (scene) {
+      const sceneEnd = Math.min(duration, Number(scene.endTime));
+      const userTrigger = duration - userThresholdSeconds;
+      if (scene.provider === "heuristic") {
+        if (sceneEnd - Number(scene.startTime) < userThresholdSeconds) return false;
+        return position >= userTrigger;
+      }
+      return position >= Math.max(sceneEnd, userTrigger);
+    }
 
     if (postOutroGapSeconds > userThresholdSeconds) {
       if (mode === "MINUTES_BEFORE_END") {

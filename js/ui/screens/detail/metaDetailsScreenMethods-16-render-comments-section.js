@@ -1,10 +1,52 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
+import { focusWithoutScroll } from "../../navigation/focusWithoutScroll.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./metaDetailsScreenContext.js";
+import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
+import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
+import { posterItemFromNode } from "../../components/posterOptionsMenu.js";
+import { buildWatchedTitleIdSet, isTitleItemWatched, renderTitleWatchedBadge } from "../../components/watchedTitleBadge.js";
+
+// ATV CommentsSection.kt readerCommentStyle(), converted from sp to 2x px.
+export function commentReaderTextStyle(length = 0) {
+  const count = Number(length) || 0;
+  if (count <= 160) return { fontSize: 80, lineHeight: 96 };
+  if (count <= 280) return { fontSize: 60, lineHeight: 76 };
+  if (count <= 420) return { fontSize: 48, lineHeight: 62 };
+  if (count <= 650) return { fontSize: 40, lineHeight: 52 };
+  if (count <= 900) return { fontSize: 36, lineHeight: 46 };
+  return { fontSize: 32, lineHeight: 42 };
+}
+
+// ATV formatCommentTimestamp(): createdAt, then updatedAt, numeric or ISO.
+export function formatCommentTimestamp(createdAt, updatedAt, locale = "en") {
+  const raw = String(createdAt || "").trim() || String(updatedAt || "").trim();
+  if (!raw) return "";
+  let timestamp = Date.parse(raw);
+  if (!Number.isFinite(timestamp) && /^\d+$/.test(raw)) {
+    const value = Number(raw);
+    timestamp = value < 100000000000 ? value * 1000 : value;
+  }
+  if (!Number.isFinite(timestamp)) return "";
+  try {
+    return new Date(timestamp).toLocaleDateString(locale || undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
+  } catch (_) {
+    return "";
+  }
+}
 
 export function createMetaDetailsScreenMethods16() {
   const {
     Router,
     ScreenUtils,
+    NuvioDialog,
+    LayoutPreferences,
+    I18n,
+    contentTextDirection,
     t,
     detailImageLoadingMode,
     isSeriesDetailMeta,
@@ -24,6 +66,32 @@ export function createMetaDetailsScreenMethods16() {
   const RAIL_EXTEND_AHEAD = 6;
 
   return {
+    openSynopsis() {
+      if (this.synopsisDialog) return;
+      const text = document.createElement("div");
+      text.className = "detail-synopsis-full-text";
+      text.tabIndex = -1;
+      text.textContent = this.meta?.description || "";
+      const close = () => {
+        this.synopsisDialog?.destroy();
+        this.synopsisDialog = null;
+        this.focusDetailDescriptor({ selector: ".series-detail-description" });
+      };
+      this.synopsisDialog = new NuvioDialog({
+        title: this.meta?.name || "",
+        subtitle: t("hero_synopsis_dismiss_hint"),
+        widthVw: 100,
+        panelClassName: "detail-synopsis-dialog",
+        content: () => text,
+        onVerticalNavigate: (direction) => {
+          this.animateScroll(text, "y", text.scrollTop + direction * 260);
+          return true;
+        },
+        onDismiss: close
+      });
+      this.synopsisDialog.mount(document.body);
+      focusWithoutScroll(text);
+    },
     renderCommentsSection() {
       if (this.commentsLoading) {
         const cards = Array.from({ length: 3 })
@@ -100,7 +168,7 @@ export function createMetaDetailsScreenMethods16() {
       return { list: list.slice(0, shown), offset: 0 };
     },
     renderPreviewCard(rawItem, fallbackType = "movie") {
-      const item = normalizePreviewItem(rawItem, fallbackType);
+      const item = customPosterForItem(normalizePreviewItem(rawItem, fallbackType), "details", "landscape");
       const year = extractPreviewYear(item.releaseInfo);
       const primaryImage = item.landscapePoster || item.poster || "";
       const fallbackImage = item.poster && item.poster !== primaryImage ? item.poster : "";
@@ -115,7 +183,7 @@ export function createMetaDetailsScreenMethods16() {
             <div class="detail-morelike-poster-wrap">
               ${
                 primaryImage
-                  ? `<img class="detail-morelike-poster-image" src="${escapeHtml(primaryImage)}" alt="${escapeHtml(item.name || "content")}" loading="${detailImageLoadingMode()}" decoding="async"${fallbackImage ? ` data-fallback-src="${escapeHtml(fallbackImage)}"` : ""} onerror="var next=this.dataset.fallbackSrc||''; if(next && this.src !== next){ this.src = next; this.dataset.fallbackSrc=''; return; } this.hidden = true; var placeholder = this.nextElementSibling; if(placeholder){ placeholder.hidden = false; }" />`
+                  ? `<img class="detail-morelike-poster-image"${posterFallbackAttributes(item, true)} src="${escapeHtml(primaryImage)}" alt="" loading="${detailImageLoadingMode()}" decoding="async"${fallbackImage ? ` data-fallback-src="${escapeHtml(fallbackImage)}"` : ""} onerror="var next=this.dataset.fallbackSrc||''; if(next && this.src !== next){ this.src = next; this.dataset.fallbackSrc=''; return; } this.hidden = true; var placeholder = this.nextElementSibling; if(placeholder){ placeholder.hidden = false; }" />`
                   : ""
               }
               <div class="detail-morelike-poster placeholder"${primaryImage ? " hidden" : ""}></div>
@@ -126,13 +194,11 @@ export function createMetaDetailsScreenMethods16() {
         `;
     },
     renderCommentCard(review, index) {
-      const body =
-        review.spoiler || review.containsInlineSpoilers
-          ? t("detail_comments_spoiler_hidden", {}, "Spoiler review. Press OK to reveal.")
-          : review.comment;
+      const isSpoiler = Boolean(review.spoiler || review.containsInlineSpoilers);
+      const body = isSpoiler ? t("detail_comments_spoiler_hidden", {}, "Spoiler review. Press OK to reveal.") : review.comment;
       const chips = [
         review.review ? t("detail_comments_badge_review", {}, "Review") : "",
-        review.spoiler || review.containsInlineSpoilers ? t("detail_comments_badge_spoiler", {}, "Spoiler") : "",
+        isSpoiler ? t("detail_comments_badge_spoiler", {}, "Spoiler") : "",
         review.rating != null
           ? t(
               "detail_comments_badge_rating",
@@ -150,10 +216,181 @@ export function createMetaDetailsScreenMethods16() {
             <article class="detail-comment-card focusable" data-action="openComment" data-comment-index="${index}">
               <h4>${escapeHtml(review.authorDisplayName || "Trakt user")}</h4>
               ${chips ? `<div class="detail-comment-chips">${chips}</div>` : ""}
-              <p>${escapeHtml(body)}</p>
+              <p${isSpoiler ? ' class="is-spoiler"' : ""}>${escapeHtml(body)}</p>
               <small>${escapeHtml(t("detail_comments_likes", { likes: review.likes || 0 }, "{{likes}} likes"))}</small>
             </article>
           `;
+    },
+    openCommentOverlay(index) {
+      const review = this.commentsItems[index];
+      if (!review || this.commentOverlayDialog) return;
+      const overlay = {
+        index,
+        revealed: !(review.spoiler || review.containsInlineSpoilers),
+        mainEl: null,
+        bodyEl: null,
+        hintEl: null,
+        loading: false
+      };
+      this.selectedCommentIndex = index;
+      this.commentOverlay = overlay;
+      const content = document.createElement("div");
+      content.className = "detail-comment-overlay";
+      content.tabIndex = -1;
+      content.innerHTML = `
+        <div class="detail-comment-overlay-brand">
+          <img src="assets/icons/trakt_tv_glyph.svg" alt="" />
+          <span>${escapeHtml(t("detail_comments_back_hint", {}, "Click back to close"))}</span>
+        </div>
+        <div class="detail-comment-overlay-main"></div>
+      `;
+      overlay.mainEl = content.querySelector(".detail-comment-overlay-main");
+      this.commentOverlayDialog = new NuvioDialog({
+        title: t("detail_comments_title", {}, "Comments"),
+        widthVw: 100,
+        panelClassName: "detail-comment-dialog",
+        content: () => content,
+        onKey: (key) => this.handleCommentOverlayKey(key),
+        onDismiss: () => this.closeCommentOverlay()
+      }).mount(document.body);
+      this.renderCommentOverlayContent();
+      focusWithoutScroll(content);
+    },
+    renderCommentOverlayContent() {
+      const overlay = this.commentOverlay;
+      const main = overlay?.mainEl;
+      const review = this.commentsItems[overlay?.index ?? -1];
+      if (!overlay || !main || !review) return;
+      const isSpoiler = Boolean(review.spoiler || review.containsInlineSpoilers);
+      const hidden = isSpoiler && !overlay.revealed;
+      const bodyText = hidden ? t("detail_comments_spoiler_hidden", {}, "Spoiler review. Press OK to reveal.") : review.comment;
+      const labels = [];
+      if (this.commentsMode === "episode" && this.commentsEpisodeTarget) {
+        labels.push(`S${this.commentsEpisodeTarget.season}E${this.commentsEpisodeTarget.episode}`);
+      }
+      if (review.review) labels.push(t("detail_comments_badge_review", {}, "Review"));
+      if (isSpoiler) labels.push(t("detail_comments_badge_spoiler", {}, "Spoiler"));
+      if (review.rating != null) {
+        labels.push(
+          t(
+            "detail_comments_badge_rating",
+            { rating: formatRatingValue(review.rating, { digits: 0, stripTrailingZero: true }) },
+            "{{rating}}/10"
+          )
+        );
+      }
+      const date = formatCommentTimestamp(review.createdAt, review.updatedAt, I18n.getLocale());
+      if (date) labels.push(date);
+      const meta = labels
+        .map((label, index) => `${index ? '<span class="detail-comment-overlay-dot"></span>' : ""}<span>${escapeHtml(label)}</span>`)
+        .join("");
+      const username = String(review.authorUsername || "").trim();
+      main.innerHTML = `
+        <div class="detail-comment-overlay-head">
+          <h2>${escapeHtml(review.authorDisplayName || "Trakt user")}</h2>
+          ${username ? `<p class="detail-comment-overlay-username">@${escapeHtml(username)}</p>` : ""}
+          ${meta ? `<div class="detail-comment-overlay-meta">${meta}</div>` : ""}
+        </div>
+        <div class="detail-comment-overlay-body${hidden ? " is-spoiler" : ""}" dir="${contentTextDirection(bodyText)}">${escapeHtml(bodyText)}</div>
+        <div class="detail-comment-overlay-foot">
+          <span>${escapeHtml(t("detail_comments_likes", { likes: review.likes || 0 }, "{{likes}} likes"))}</span>
+          <span class="detail-comment-overlay-hint"${hidden ? "" : " hidden"}>${escapeHtml(t("detail_comments_reveal_spoiler_hint", {}, "Press OK to reveal spoiler."))}</span>
+          ${overlay.loading ? '<span class="detail-comment-overlay-loading">...</span>' : ""}
+        </div>
+      `;
+      overlay.bodyEl = main.querySelector(".detail-comment-overlay-body");
+      overlay.hintEl = main.querySelector(".detail-comment-overlay-hint");
+      this.applyCommentOverlayBodyStyle(bodyText);
+    },
+    applyCommentOverlayBodyStyle(text) {
+      const body = this.commentOverlay?.bodyEl;
+      if (!body) return;
+      const style = commentReaderTextStyle(String(text || "").length);
+      body.style.fontSize = `${style.fontSize}px`;
+      body.style.lineHeight = `${style.lineHeight}px`;
+      body.scrollTop = 0;
+    },
+    revealCommentOverlay() {
+      const overlay = this.commentOverlay;
+      const review = this.commentsItems[overlay?.index ?? -1];
+      if (!overlay || !review || overlay.revealed) return;
+      overlay.revealed = true;
+      if (overlay.bodyEl) {
+        overlay.bodyEl.textContent = review.comment;
+        overlay.bodyEl.classList.remove("is-spoiler");
+        overlay.bodyEl.setAttribute("dir", contentTextDirection(review.comment));
+      }
+      if (overlay.hintEl) overlay.hintEl.hidden = true;
+      this.applyCommentOverlayBodyStyle(review.comment);
+    },
+    handleCommentOverlayKey(key) {
+      if (!this.commentOverlay) return false;
+      if (key.isLeft || key.isRight) {
+        void this.moveCommentOverlay(key.isLeft ? -1 : 1);
+        return true;
+      }
+      if (key.isUp || key.isDown) {
+        const body = this.commentOverlay.bodyEl;
+        if (body) {
+          this.animateScroll(body, "y", body.scrollTop + (key.isDown ? 260 : -260));
+        }
+        return true;
+      }
+      if ((key.isEnter || key.isSpace) && !this.commentOverlay.revealed) {
+        this.revealCommentOverlay();
+        return true;
+      }
+      return false;
+    },
+    async moveCommentOverlay(delta) {
+      const overlay = this.commentOverlay;
+      if (!overlay) return;
+      const target = overlay.index + delta;
+      if (target < 0) return;
+      if (target >= this.commentsItems.length) {
+        const from = overlay.index;
+        const canLoadMore = delta > 0 && this.commentsPage > 0 && this.commentsPageCount > this.commentsPage;
+        if (!canLoadMore || overlay.loading) return;
+        overlay.loading = true;
+        this.renderCommentOverlayContent();
+        await this.loadTraktComments({ append: true });
+        if (this.commentOverlay !== overlay) return;
+        overlay.loading = false;
+        if (overlay.index !== from || target >= this.commentsItems.length) {
+          this.renderCommentOverlayContent();
+          return;
+        }
+      }
+      const review = this.commentsItems[target];
+      if (!review) return;
+      overlay.index = target;
+      overlay.revealed = !(review.spoiler || review.containsInlineSpoilers);
+      this.selectedCommentIndex = target;
+      this.renderCommentOverlayContent();
+    },
+    closeCommentOverlay() {
+      if (!this.commentOverlayDialog && !this.commentOverlay) return;
+      const index = Number(this.commentOverlay?.index ?? this.selectedCommentIndex);
+      this.commentOverlayDialog?.destroy();
+      this.commentOverlayDialog = null;
+      this.commentOverlay = null;
+      const descriptor =
+        Number.isFinite(index) && index >= 0
+          ? {
+              selector: `.detail-comment-card[data-comment-index="${index}"]`,
+              preserveVerticalScroll: true
+            }
+          : null;
+      const railKey = `comments:${this.commentsMode}`;
+      const rail = this._railWindows?.[railKey];
+      if (descriptor && rail && index >= rail.shown) {
+        rail.shown = Math.min(rail.items.length, index + 1);
+        this.updateRenderedDetailSections(this.meta, descriptor);
+        return;
+      }
+      if (!this.focusDetailDescriptor(descriptor)) {
+        this.focusDetailDescriptor({ selector: ".detail-comments-track .detail-comment-card" });
+      }
     },
     extendRailWindowIfNeeded(target) {
       if (!(target instanceof HTMLElement) || !this.container?.contains(target)) {
@@ -190,6 +427,7 @@ export function createMetaDetailsScreenMethods16() {
       }
       windowState.shown = nextShown;
       track.insertAdjacentHTML("beforeend", html);
+      void this.refreshPreviewWatchedBadges();
       return true;
     },
     renderPreviewRail(items = [], fallbackType = "movie", railKey = "morelike") {
@@ -250,8 +488,64 @@ export function createMetaDetailsScreenMethods16() {
           </section>
         `;
     },
+    async refreshPreviewWatchedBadges() {
+      const token = this.detailLoadToken;
+      const request = (this.previewWatchedRequest || 0) + 1;
+      this.previewWatchedRequest = request;
+      const container = this.container;
+      const cards = Array.from(container?.querySelectorAll(".detail-morelike-card") || []);
+      if (!cards.length) return;
+      // Use the exact identities and title projection consumed by the hold menu.
+      const items = cards.map((card) => posterItemFromNode(card, this.params?.itemType || "movie"));
+      const baseWatchedItems = await watchedItemsRepository.getAll(2000).catch(() => []);
+      if (token !== this.detailLoadToken || request !== this.previewWatchedRequest || container !== this.container) return;
+      const watchedItems = await watchedTitleStateRepository
+        .getTitleWatchedItems(items, { baseWatchedItems, limit: 2000 })
+        .catch(() => baseWatchedItems);
+      if (token !== this.detailLoadToken || request !== this.previewWatchedRequest || container !== this.container) return;
+      const watchedTitleIds = buildWatchedTitleIdSet(watchedItems);
+      cards.forEach((card, index) => {
+        if (!container.contains(card)) return;
+        const wrap = card.querySelector(".detail-morelike-poster-wrap");
+        if (!wrap || !items[index]) return;
+        const badge = wrap.querySelector(".title-watched-badge");
+        if (isTitleItemWatched(items[index], watchedTitleIds)) {
+          if (!badge) wrap.insertAdjacentHTML("beforeend", renderTitleWatchedBadge());
+        } else if (badge) {
+          wrap.removeChild(badge);
+        }
+      });
+    },
     bindDetailChrome() {
+      this.container
+        ?.querySelector(".series-detail-shell")
+        ?.style.setProperty(
+          "--detail-episode-radius",
+          `${Math.max(0, Number(LayoutPreferences.get().posterCardCornerRadiusDp ?? 12)) * 2}px`
+        );
+      const logo = this.container?.querySelector(".series-detail-logo");
+      if (logo) {
+        logo.onerror = () => {
+          const title = document.createElement("h1");
+          title.className = "series-detail-title";
+          title.textContent = logo.alt;
+          logo.replaceWith(title);
+        };
+        if (logo.complete && !logo.naturalWidth) logo.onerror();
+      }
+      void this.refreshPreviewWatchedBadges();
       this.observeEpisodeThumbnails();
+      const description = this.container?.querySelector(".series-detail-description");
+      const preview = description?.querySelector(".detail-synopsis-preview");
+      if (preview) {
+        const truncated = preview.scrollHeight > preview.clientHeight + 1;
+        description.classList.toggle("focusable", truncated);
+        if (truncated) description.setAttribute("role", "button");
+        else description.removeAttribute("role");
+        description.tabIndex = -1;
+        description.querySelector(".detail-synopsis-more").hidden = !truncated;
+        this._detailFocusListCache = null;
+      }
       const content = this.container?.querySelector(".series-detail-content");
       if (!content) {
         return;
@@ -339,7 +633,7 @@ export function createMetaDetailsScreenMethods16() {
             return;
           }
           if (!isSeriesDetailMeta(this.meta, this.episodes) && tab !== this.movieInsightTab) {
-            this.movieInsightTab = ["cast", "ratings", "morelike", "trailer", "collection"].includes(tab) ? tab : "cast";
+            this.movieInsightTab = ["cast", "morelike", "trailer", "collection"].includes(tab) ? tab : "cast";
             this.updateRenderedDetailSections(this.meta);
           }
           return;

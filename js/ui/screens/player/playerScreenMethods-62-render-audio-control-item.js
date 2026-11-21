@@ -10,7 +10,7 @@ export function createPlayerScreenMethods62() {
       const focused = this.audioFocusedColumn === "controls" && index === this.audioMixFocusIndex;
       if (control.toggle) {
         return `
-            <div class="player-audio-control-card player-audio-toggle focusable${this.persistAudioAmplification ? " selected" : ""}${focused ? " focused" : ""}" data-audio-column="controls" data-audio-index="${index}">
+            <div class="player-audio-control-card player-audio-toggle focusable${this.persistAudioAmplification ? " selected" : ""}${focused ? " focused" : ""}" role="switch" aria-checked="${this.persistAudioAmplification ? "true" : "false"}" data-audio-column="controls" data-audio-index="${index}">
               <div class="player-dialog-item-main">${escapeHtml(control.title)}</div>
               <div class="player-dialog-item-sub">${escapeHtml(control.helper || "")}</div>
             </div>
@@ -21,8 +21,8 @@ export function createPlayerScreenMethods62() {
             <div class="player-audio-control-title">${escapeHtml(control.title)}</div>
             <div class="player-audio-control-value">${escapeHtml(control.value)}</div>
             <div class="player-audio-step-row">
-              <button class="player-dialog-step player-dialog-step-minus focusable${focused ? " focused" : ""}${!control.canDecrease ? " disabled" : ""}" type="button" tabindex="-1" data-audio-column="controls" data-audio-index="${index}" data-audio-step="-1">&#8722;</button>
-              <button class="player-dialog-step player-dialog-step-plus focusable${focused ? " focused" : ""}${!control.canIncrease ? " disabled" : ""}" type="button" tabindex="-1" data-audio-column="controls" data-audio-index="${index}" data-audio-step="1">&#43;</button>
+              <button class="player-dialog-step player-dialog-step-minus focusable${focused ? " focused" : ""}${!control.canDecrease ? " disabled" : ""}" type="button" tabindex="-1" data-audio-column="controls" data-audio-index="${index}" data-audio-step="-1" aria-label="${escapeHtml(t("cd_decrease", {}, "Decrease"))} ${escapeHtml(control.title)}">&#8722;</button>
+              <button class="player-dialog-step player-dialog-step-plus focusable${focused ? " focused" : ""}${!control.canIncrease ? " disabled" : ""}" type="button" tabindex="-1" data-audio-column="controls" data-audio-index="${index}" data-audio-step="1" aria-label="${escapeHtml(t("cd_increase", {}, "Increase"))} ${escapeHtml(control.title)}">&#43;</button>
             </div>
             <div class="player-dialog-item-sub">${escapeHtml(control.helper || "")}</div>
           </div>
@@ -133,6 +133,12 @@ export function createPlayerScreenMethods62() {
       this.resetControlsAutoHide();
     },
     async applyPlaybackSpeed(speed = 1) {
+      if (this.partyBlocksControl?.()) {
+        this.renderControlButtons();
+        this.renderSpeedDialog();
+        return false;
+      }
+      this.partyRateNudge = null;
       let applied = false;
       try {
         applied = typeof PlayerController.setPlaybackRate === "function" ? await PlayerController.setPlaybackRate(speed) : false;
@@ -146,6 +152,7 @@ export function createPlayerScreenMethods62() {
       }
       this.renderControlButtons();
       this.renderSpeedDialog();
+      this.publishPartyPlayback?.({ rate: Number(speed) || 1 });
       return true;
     },
     renderSpeedDialog() {
@@ -167,7 +174,7 @@ export function createPlayerScreenMethods62() {
             ${speedOptions
               .map(
                 (speed, index) => `
-              <div class="player-dialog-item focusable${speed === currentSpeed ? " selected" : ""}${index === this.speedDialogIndex ? " focused" : ""}" data-speed-index="${index}">
+              <div class="player-dialog-item focusable${speed === currentSpeed ? " selected" : ""}${index === this.speedDialogIndex ? " focused" : ""}" role="radio" aria-checked="${speed === currentSpeed ? "true" : "false"}" data-speed-index="${index}">
                 <div class="player-dialog-item-main">${escapeHtml(`${speed}x`)}</div>
                 <div class="player-dialog-item-sub">${escapeHtml(speed === 1 ? t("common.normal", {}, "Normal") : t("player_playback_speed", {}, "Playback speed"))}</div>
                 <div class="player-dialog-item-check">${speed === currentSpeed ? "&#10003;" : ""}</div>
@@ -217,6 +224,24 @@ export function createPlayerScreenMethods62() {
         return orderedStreams;
       }
       return orderedStreams.filter((stream) => stream.addonName === this.sourceFilter);
+    },
+    focusPlayingSourceIfUntouched({ allowFirstResult = false } = {}) {
+      if (!this.sourcesPanelVisible || this.sourcesUserMoved) {
+        return false;
+      }
+      const list = this.getFilteredSources();
+      const playingUrl = this.streamCandidates[this.currentStreamIndex]?.url;
+      const playingIndex = playingUrl ? list.findIndex((stream) => stream?.url === playingUrl) : -1;
+      if (playingIndex >= 0) {
+        // Results keep arriving, so the playing stream may show up after the first one.
+        this.sourcesUserMoved = true;
+        this.sourcesFocus = { zone: "list", index: playingIndex };
+        return true;
+      }
+      if (allowFirstResult && list.length) {
+        this.sourcesFocus = { zone: "list", index: 0 };
+      }
+      return false;
     },
     ensureSourcesFocus(filters = null, list = null) {
       const availableFilters = Array.isArray(filters) ? filters : this.getSourceFilters();
@@ -291,6 +316,7 @@ export function createPlayerScreenMethods62() {
     openSourcesPanel({ forceReload = false } = {}) {
       streamRepository.setLocalPluginSearchPaused(false);
       this.cancelSeekPreview({ commit: false });
+      this.closeChaptersPanel?.({ restoreFocus: false });
       this.sourcesPanelVisible = true;
       this.sourcesLastNavigationRepeatAt = 0;
       this.subtitleDialogVisible = false;
@@ -303,6 +329,9 @@ export function createPlayerScreenMethods62() {
         zone: "filter",
         index: clamp(filters.indexOf(this.sourceFilter), 0, Math.max(0, filters.length - 1))
       };
+      // Android opens the panel on the stream playing now, else the first result.
+      this.sourcesUserMoved = false;
+      this.focusPlayingSourceIfUntouched({ allowFirstResult: true });
 
       this.renderControlButtons();
       this.renderSubtitleDialog();

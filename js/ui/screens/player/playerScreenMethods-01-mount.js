@@ -1,3 +1,7 @@
+import { canResolveMediaServerStream } from "../../../data/mediaserver/mediaServerRepository.js";
+import { loadPlayerShuffleWatched } from "./playerEpisodeShuffle.js";
+import { activeStreamLinkProfile } from "../../../data/local/streamLinkCacheStore.js";
+import { sourceFallbackKey } from "../../../core/player/sourceFallback.js";
 /* global __NUVIO_APP_VERSION__ */
 import * as internals from "./playerScreenContext.js";
 import { initializePlayerMountState } from "./playerMountStateInitialization.js";
@@ -11,7 +15,6 @@ export function createPlayerScreenMethods01() {
     onWebOsImageProxyReady,
     streamRepository,
     PlayerSettingsStore,
-    WebOsAudioCompatibilityStore,
     Environment,
     DirectDebridResolver,
     WebOsEngineFsResolver,
@@ -34,13 +37,16 @@ export function createPlayerScreenMethods01() {
   } = internals;
 
   return {
-    async mount(params = {}) {
+    async mount(params = {}, navigationContext = {}) {
+      PlayerController.currentPlaybackIsLive = false;
       streamRepository.setLocalPluginSearchPaused(false);
       this.container = document.getElementById("player");
       this.container.style.display = "block";
       this.container.classList.toggle("player-platform-webos", Environment.isWebOS());
       const mountToken = Number(this.playerMountToken || 0) + 1;
       this.playerMountToken = mountToken;
+      this.shuffleNextCache = null;
+      this.shuffleRemoteWatched = new Set();
       this.playerRouteActive = true;
       this.webOsClockLocaleInfo = null;
       this.webOsClockSettingsSubscription?.cancel?.();
@@ -71,14 +77,15 @@ export function createPlayerScreenMethods01() {
         }
       }
       this.params = params;
+      this.streamLinkCacheProfileId = activeStreamLinkProfile();
+      // Android: a link reopened from the reuse-last-link cache is fetched again after an error.
+      this.linkCacheSourceUrl = params?.fromLinkCache ? String(params.streamUrl || "").trim() || null : null;
+      this.linkRefreshAttemptedUrl = null;
       this.trackPreferenceContentId = this.getTrackPreferenceContentId();
       this.subtitleDelayPreferenceVideoId = this.getSubtitleDelayPreferenceVideoId();
       this.rememberedAudioTrackPreference = TrackPreferencesStore.getAudio(this.trackPreferenceContentId);
       this.rememberedSubtitleTrackPreference = TrackPreferencesStore.getSubtitle(this.trackPreferenceContentId);
       if (Environment.isWebOS()) {
-        const legacyForceAll = Boolean(PlayerSettingsStore.get().forceDtsTrueHdAudio);
-        const audioCompatibility = WebOsAudioCompatibilityStore.get({ legacyForceAll });
-        PlayerController.setWebOsAudioCodecOverrides?.(audioCompatibility);
         void PlayerController.refreshWebOsDeviceInfo?.();
       }
       this.contentLanguage = resolveRouteContentLanguage(params);
@@ -109,6 +116,12 @@ export function createPlayerScreenMethods01() {
       const initialStreamCandidate = preferredStreamCandidate || this.selectBestStreamCandidate(this.streamCandidates);
       const initialStreamLocator = params.streamUrl || initialStreamCandidate?.url || initialStreamCandidate?.externalUrl || null;
       const initialStreamUrl = directPlaybackUrl(params.streamUrl) || streamDirectPlaybackUrl(initialStreamCandidate);
+      // Android source fallback: only a source auto selection picked falls back.
+      this.autoSelectedSourceKey = params?.autoPlayNav && initialStreamCandidate ? sourceFallbackKey(initialStreamCandidate) : null;
+      this.sourceFallbackAttempts = 0;
+      this.sourceFallbackTriedKeys = new Set();
+      this.sourceFallbackInFlight = false;
+      this.sourceFallbackExhausted = false;
       if (!this.streamCandidates.length && initialStreamLocator) {
         this.streamCandidates = this.normalizeStreamCandidates([
           {
@@ -130,6 +143,7 @@ export function createPlayerScreenMethods01() {
       if (this.currentStreamIndex < 0) {
         this.currentStreamIndex = 0;
       }
+      this.initialFilenameStreamCandidate = this.streamCandidates[this.currentStreamIndex] || null;
       // Remember the stream that actually plays so the stream list can focus it on
       // the next visit. Only persist when the caller provided a real candidate list
       // (this skips trailers and synthetic single-url playback).
@@ -171,6 +185,10 @@ export function createPlayerScreenMethods01() {
 
       this.renderPlayerUi();
       this.bindPlayerExitCleanup();
+      if (!this.isExternalFrameMode()) {
+        this.bindParty(navigationContext);
+        this.loadPartyProfile();
+      }
       this.pauseOverlayMeta = this.buildPauseOverlayMeta();
       if (!this.isExternalFrameMode()) {
         this.bindVideoEvents();
@@ -180,6 +198,7 @@ export function createPlayerScreenMethods01() {
         void this.fetchParentalGuide();
         void this.fetchSkipIntervals();
         void this.hydratePauseOverlayMeta();
+        void loadPlayerShuffleWatched(this, mountToken);
         void this.loadPostPlayEpisodeMetadata(mountToken);
       }
       this.renderEpisodePanel();
@@ -214,6 +233,9 @@ export function createPlayerScreenMethods01() {
             maxWaitMs: prioritizeWebOsRemoteMkvPlayback ? WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS : 0
           });
         }
+        if (!this.currentEngineFsStream) {
+          this.prefetchTizenEmbeddedAudioTracks(initialStreamUrl, sourceCandidate);
+        }
         const playbackStartPromise = this.startPlayerControllerPlayback(
           this.activePlaybackUrl,
           this.buildPlaybackContext(sourceCandidate),
@@ -225,7 +247,18 @@ export function createPlayerScreenMethods01() {
             return;
           }
         }
-        this.loadManifestTrackDataForCurrentStream(this.activePlaybackUrl);
+        if (prioritizeWebOsRemoteMkvPlayback) {
+          this.loadManifestTrackDataForCurrentStream(this.activePlaybackUrl);
+        } else {
+          // The player must issue the first manifest request: some live
+          // providers limit concurrent connections and reject a probe.
+          const loadTrackDataAfterPlayback = () => {
+            if (this.isActiveMountToken(mountToken) && this.activePlaybackUrl === initialStreamUrl) {
+              this.loadManifestTrackDataForCurrentStream(this.activePlaybackUrl);
+            }
+          };
+          void playbackStartPromise.then(loadTrackDataAfterPlayback, loadTrackDataAfterPlayback);
+        }
         this.startTrackDiscoveryWindow({
           durationMs: prioritizeWebOsRemoteMkvPlayback ? WEBOS_REMOTE_MKV_AUDIO_GATE_MAX_WAIT_MS : 7000
         });
@@ -234,7 +267,8 @@ export function createPlayerScreenMethods01() {
         const sourceCandidate = initialStreamCandidate || this.getCurrentStreamCandidate();
         if (
           sourceCandidate &&
-          (DirectDebridResolver.canResolveStream(sourceCandidate) ||
+          (canResolveMediaServerStream(sourceCandidate) ||
+            DirectDebridResolver.canResolveStream(sourceCandidate) ||
             WebOsEngineFsResolver.canResolveStream(sourceCandidate) ||
             TizenStreamingServerResolver.canResolveStream(sourceCandidate))
         ) {
@@ -248,7 +282,7 @@ export function createPlayerScreenMethods01() {
       if (!this.isExternalFrameMode()) {
         this.loadSubtitles();
         this.syncTrackState();
-        this.tickTimer = setInterval(() => this.updateUiTick(), 1000);
+        this.tickTimer = setInterval(() => this.requestUiTick(), 1000);
         this.startSkipIntervalCheckTimer();
         this.endedHandler = () => {
           if (PlayerController.isLivePlaybackItemType?.()) {

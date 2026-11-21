@@ -6,6 +6,7 @@ export function createStreamScreenMethods11() {
 
   return {
     cleanup() {
+      this.unbindStreamParty();
       this.streamLoadAbortController?.abort?.();
       this.streamLoadAbortController = null;
       streamRepository.setLocalPluginSearchPaused(true);

@@ -1,11 +1,20 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./metaDetailsScreenContext.js";
+import { MdbListSettingsStore, MDBLIST_PROVIDER_SETTINGS } from "../../../data/local/mdbListSettingsStore.js";
+
+const RATING_ICONS = {
+  trakt: "assets/icons/mdblist_trakt.svg",
+  imdb: "assets/icons/imdb_logo_2016.svg",
+  tmdb: "assets/icons/mdblist_tmdb.svg",
+  letterboxd: "assets/icons/mdblist_letterboxd.svg",
+  metacritic: "assets/icons/mdblist_metacritic.png",
+  mal: "assets/icons/mdblist_mal.svg"
+};
 
 export function createMetaDetailsScreenMethods08() {
   const {
     ScreenUtils,
     LayoutPreferences,
-    showHomeRatings,
     mdbListRatingIcon,
     renderLoadingIndicator,
     EPISODE_VIRTUALIZATION_THRESHOLD,
@@ -14,8 +23,6 @@ export function createMetaDetailsScreenMethods08() {
     resolveDetailBackdropUrl,
     isSeriesDetailMeta,
     formatMdbListRating,
-    resolveImdbRating,
-    getAddonIconPath,
     escapeHtml,
     escapeAttribute,
     resolveTrailerItems,
@@ -25,15 +32,18 @@ export function createMetaDetailsScreenMethods08() {
   return {
     renderExternalRatingsRow(meta = {}) {
       const ratings = meta?.mdbListRatings || {};
-      const items = [
-        ["trakt", getAddonIconPath("trakt"), ratings.trakt],
-        ["imdb", "assets/icons/imdb_logo_2016.svg", ratings.imdb],
-        ["tmdb", "assets/icons/mdblist_tmdb.svg", ratings.tmdb],
-        ["letterboxd", "assets/icons/mdblist_letterboxd.svg", ratings.letterboxd],
-        ["tomatoes", mdbListRatingIcon("tomatoes", ratings.tomatoes, ratings), ratings.tomatoes],
-        ["audience", mdbListRatingIcon("audience", ratings.audience, ratings), ratings.audience],
-        ["metacritic", "assets/icons/mdblist_metacritic.png", ratings.metacritic]
-      ].filter(([, , value]) => value != null && String(value).trim() !== "");
+      const settings = MdbListSettingsStore.get();
+      // Android: MDBListSettings.enabledRatingOrder() drives the detail hero row.
+      const items = settings.ratingOrder
+        .filter(
+          (provider) =>
+            settings[MDBLIST_PROVIDER_SETTINGS[provider]] !== false && ratings[provider] != null && String(ratings[provider]).trim() !== ""
+        )
+        .map((provider) => [
+          provider,
+          RATING_ICONS[provider] || mdbListRatingIcon(provider, ratings[provider], ratings),
+          ratings[provider]
+        ]);
       if (!items.length) {
         return "";
       }
@@ -303,35 +313,17 @@ export function createMetaDetailsScreenMethods08() {
     },
     renderMovieInsightSection(meta) {
       const trailerItems = resolveTrailerItems(meta);
-      const showRatings = showHomeRatings(LayoutPreferences.get().homeImdbRatingsVisibility);
+      // Android shows the Ratings tab only for series (episode ratings); movie ratings live in the hero.
+      if (this.movieInsightTab === "ratings") {
+        this.movieInsightTab = "cast";
+      }
       const tabItems = [
         ["cast", t("detail.creatorCast", {}, "Creator and Cast")],
-        ...(showRatings ? [["ratings", t("detail.ratings", {}, "Ratings")]] : []),
         ...(this.moreLikeThisItems.length ? [["morelike", t("detail.moreLikeThis", {}, "More Like This")]] : []),
         ...(trailerItems.length ? [["trailer", t("detail_tab_trailer", {}, "Trailer")]] : []),
         ...(this.collectionItems.length ? [["collection", this.collectionName || "Collection"]] : [])
       ];
       const tabs = tabItems.length > 1 ? this.renderPeopleTabs("movie", this.movieInsightTab, tabItems) : "";
-      if (this.movieInsightTab === "ratings" && showRatings) {
-        const imdbValue = resolveImdbRating(meta);
-        const imdb = imdbValue != null && String(imdbValue).trim() !== "" ? String(imdbValue) : "-";
-        const tmdb = Number.isFinite(Number(meta?.tmdbRating)) ? String(meta.tmdbRating) : "-";
-        return `
-            <section class="series-insight-section">
-              ${tabs}
-              <div class="movie-ratings-row">
-                <article class="movie-rating-card">
-                  <img src="assets/icons/imdb_logo_2016.svg" alt="IMDb" />
-                  <div class="movie-rating-value">${imdb}</div>
-                </article>
-                <article class="movie-rating-card">
-                  <img src="assets/icons/mdblist_tmdb.svg" alt="TMDB" />
-                  <div class="movie-rating-value">${tmdb}</div>
-                </article>
-              </div>
-            </section>
-          `;
-      }
       if (this.movieInsightTab === "collection") {
         return `
             <section class="series-insight-section">

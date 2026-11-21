@@ -1,3 +1,5 @@
+import { MdbListLibrary } from "../../../data/repository/mdbListLibrary.js";
+import { trackingErrorMessage } from "../../components/trackingErrorMessage.js";
 import {
   LibraryListPrivacy,
   LibrarySortOptionKey,
@@ -6,6 +8,7 @@ import {
   libraryTypeLabel
 } from "../../../data/repository/libraryRepository.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
+import { ProfileManager } from "../../../core/profile/profileManager.js";
 import { watchedItemsRepository } from "../../../data/repository/watchedItemsRepository.js";
 import { watchedTitleStateRepository } from "../../../data/repository/watchedTitleStateRepository.js";
 import { I18n } from "../../../i18n/index.js";
@@ -25,7 +28,7 @@ const ALL_KEY = "__all__";
 const MESSAGE_CLEAR_MS = 2400;
 const SYNC_LOADING_MIN_MS = 700;
 const LEADING_ARTICLE_REGEX = /^(the|an|a)\s+/i;
-export const LIBRARY_VIEW_MODE = { SAVED: "saved", CLOUD: "cloud" };
+export const LIBRARY_VIEW_MODE = { SAVED: "saved", CLOUD: "cloud", SERVERS: "servers" };
 export const LIBRARY_WATCHED_FILTER = {
   ALL: "all",
   WATCHED: "watched",
@@ -65,6 +68,28 @@ export const LIBRARY_PRIVACY_OPTIONS = [
 
 let persistedPosterFocusKey = null;
 let persistedLibraryViewMode = LIBRARY_VIEW_MODE.SAVED;
+// Android keeps LibraryViewModel alive on the back stack (Detail push, drawer
+// saveState/restoreState), so filter and sort picks survive leaving the screen.
+let persistedFilterSelections = null;
+
+function activeProfileKey() {
+  return String(ProfileManager.getActiveProfileId?.() ?? "");
+}
+
+function restoredFilterSelections() {
+  const saved = persistedFilterSelections;
+  if (!saved || saved.profileKey !== activeProfileKey()) {
+    return {};
+  }
+  return {
+    sourceMode: saved.sourceMode,
+    selectedTypeKey: saved.selectedTypeKey,
+    selectedGenre: saved.selectedGenre,
+    selectedYear: saved.selectedYear,
+    selectedWatchedFilter: saved.selectedWatchedFilter,
+    selectedSortKey: saved.selectedSortKey
+  };
+}
 
 function makeInitialState() {
   return {
@@ -99,6 +124,7 @@ function makeInitialState() {
     lastFocusedPosterKey: persistedPosterFocusKey,
     isNuvioAccount: false,
     isTraktAuthenticated: false,
+    isSimklAuthenticated: false,
     watchedTitleIds: new Set(),
     cloudLibrary: {
       isLoaded: false,
@@ -107,6 +133,7 @@ function makeInitialState() {
       providers: [],
       items: []
     },
+    ...restoredFilterSelections(),
     visibleCloudItems: [],
     availableCloudProviders: [],
     availableCloudTypes: [],
@@ -215,15 +242,6 @@ function optionLabel(option = {}) {
 
 function stripCountSuffix(value) {
   return String(value || "").replace(/\s+\(\d+\)$/, "");
-}
-
-function typeLabelForEmptyState(key) {
-  if (!key || key === ALL_KEY) {
-    return "all";
-  }
-  return libraryTypeLabel(key)
-    .replace(/\s+\(\d+\)$/, "")
-    .toLowerCase();
 }
 
 function itemTypeKey(item = {}) {
@@ -390,8 +408,20 @@ function sortForState(items, state) {
     return String(left.id).localeCompare(String(right.id), undefined, { sensitivity: "base" });
   };
 
+  const providerOrder =
+    state.sourceMode === LibrarySourceMode.MDBLIST &&
+    state.providerSortOrder?.listKey === state.selectedListKey &&
+    state.providerSortOrder?.sortKey === state.selectedSortKey
+      ? new Map(state.providerSortOrder.keys.map((key, index) => [key, index]))
+      : null;
   const sorted = [...watchedFiltered];
   sorted.sort((left, right) => {
+    if (providerOrder) {
+      const rank =
+        (providerOrder.get(`${left.type}:${left.id}`) ?? Number.MAX_SAFE_INTEGER) -
+        (providerOrder.get(`${right.type}:${right.id}`) ?? Number.MAX_SAFE_INTEGER);
+      if (rank !== 0) return rank;
+    }
     switch (state.selectedSortKey) {
       case LibrarySortOptionKey.DEFAULT: {
         const rankDiff =
@@ -416,6 +446,14 @@ function sortForState(items, state) {
           return addedDiff;
         }
         return byNameAsc(left, right);
+      }
+      case "released_asc":
+      case "released_desc": {
+        const leftDate = Date.parse(left.releaseDate || left.releaseInfo || "") || 0;
+        const rightDate = Date.parse(right.releaseDate || right.releaseInfo || "") || 0;
+        const delta =
+          state.selectedSortKey === "released_desc" ? rightDate - leftDate : leftDate - rightDate;
+        return delta || byNameAsc(left, right);
       }
       case LibrarySortOptionKey.TITLE_ASC:
         return byTitleSortAsc(left, right);
@@ -467,6 +505,18 @@ export class LibraryController {
   }
 
   dispose() {
+    if (!this.disposed) {
+      persistedFilterSelections = {
+        profileKey: activeProfileKey(),
+        sourceMode: this.state.sourceMode,
+        selectedTypeKey: this.state.selectedTypeKey,
+        selectedGenre: this.state.selectedGenre,
+        selectedYear: this.state.selectedYear,
+        selectedWatchedFilter: this.state.selectedWatchedFilter,
+        selectedSortKey: this.state.selectedSortKey,
+        posterFocusIndex: this.posterFocusIndex()
+      };
+    }
     this.disposed = true;
     this.reloadToken += 1;
     this.unsubscribeDebridSettings?.();
@@ -475,6 +525,11 @@ export class LibraryController {
       clearTimeout(this.messageTimer);
       this.messageTimer = null;
     }
+  }
+
+  posterFocusIndex() {
+    const key = this.state.lastFocusedPosterKey;
+    return this.state.visibleItems.findIndex((item) => `${item.type}:${item.id}` === key);
   }
 
   getState() {
@@ -506,24 +561,28 @@ export class LibraryController {
       ...patch
     };
     const facets = buildFacets(this.state.allItems, this.state);
+    // While items are still loading the facets are not final; reload() validates
+    // the (possibly restored) selections once the repository data is in.
+    const keepSelections = this.state.isLoading === true;
     const selectedGenre =
       this.state.selectedGenre &&
-      facets.availableGenres.some((item) => item.key === this.state.selectedGenre)
+      (keepSelections ||
+        facets.availableGenres.some((item) => item.key === this.state.selectedGenre))
         ? this.state.selectedGenre
         : null;
     const selectedYear =
       this.state.selectedYear &&
-      facets.availableYears.some((item) => item.key === this.state.selectedYear)
+      (keepSelections || facets.availableYears.some((item) => item.key === this.state.selectedYear))
         ? this.state.selectedYear
         : null;
     this.state = {
       ...this.state,
       ...facets,
-      selectedTypeKey: facets.availableTypeTabs.some(
-        (item) => item.key === this.state.selectedTypeKey
-      )
-        ? this.state.selectedTypeKey
-        : ALL_KEY,
+      selectedTypeKey:
+        keepSelections ||
+        facets.availableTypeTabs.some((item) => item.key === this.state.selectedTypeKey)
+          ? this.state.selectedTypeKey
+          : ALL_KEY,
       selectedGenre,
       selectedYear
     };
@@ -572,11 +631,27 @@ export class LibraryController {
     if (this.disposed || reloadToken !== this.reloadToken) {
       return;
     }
-    const [listTabs, allItems, watchedItems] = await Promise.all([
-      libraryRepository.getListTabs({ sourceMode }),
-      libraryRepository.getItems({ hydrate: false, sourceMode }),
-      watchedItemsRepository.getAll(5000).catch(() => [])
-    ]);
+    let listTabs, allItems, watchedItems;
+    try {
+      [listTabs, allItems, watchedItems] = await Promise.all([
+        libraryRepository.getListTabs({ sourceMode }),
+        libraryRepository.getItems({ hydrate: false, sourceMode }),
+        watchedItemsRepository.getAll(5000).catch(() => [])
+      ]);
+    } catch (error) {
+      if (sourceMode !== LibrarySourceMode.MDBLIST) throw error;
+      if (!this.disposed && reloadToken === this.reloadToken)
+        this.setState({
+          sourceMode,
+          selectedSortKey: LibrarySortOptionKey.DEFAULT,
+          allItems: [],
+          listTabs: [],
+          selectedListKey: null,
+          isLoading: false,
+          errorMessage: trackingErrorMessage(error) || t("mdblist_unavailable")
+        });
+      return;
+    }
     if (this.disposed || reloadToken !== this.reloadToken) {
       return;
     }
@@ -593,9 +668,19 @@ export class LibraryController {
         : null;
 
     const availableSortOptions =
-      sourceMode !== LibrarySourceMode.LOCAL
-        ? LIBRARY_SORT_OPTIONS
-        : LIBRARY_SORT_OPTIONS.filter((option) => option.key !== LibrarySortOptionKey.DEFAULT);
+      sourceMode === LibrarySourceMode.MDBLIST
+        ? [
+            ...LIBRARY_SORT_OPTIONS.map((option) =>
+              option.key === LibrarySortOptionKey.DEFAULT
+                ? { ...option, labelKey: "library_sort_provider_order", fallback: "Provider Order" }
+                : option
+            ),
+            { key: "released_desc", labelKey: "library_sort_released_desc" },
+            { key: "released_asc", labelKey: "library_sort_released_asc" }
+          ]
+        : sourceMode !== LibrarySourceMode.LOCAL
+          ? LIBRARY_SORT_OPTIONS
+          : LIBRARY_SORT_OPTIONS.filter((option) => option.key !== LibrarySortOptionKey.DEFAULT);
     const facets = buildFacets(allItems, {
       ...this.state,
       sourceMode,
@@ -617,13 +702,19 @@ export class LibraryController {
       facets.availableYears.some((item) => item.key === this.state.selectedYear)
         ? this.state.selectedYear
         : null;
-    const selectedSortKey = availableSortOptions.some(
-      (item) => item.key === this.state.selectedSortKey
-    )
-      ? this.state.selectedSortKey
-      : sourceMode !== LibrarySourceMode.LOCAL
+    const selectedSortKey =
+      sourceMode === LibrarySourceMode.MDBLIST && this.state.sourceMode !== sourceMode
         ? LibrarySortOptionKey.DEFAULT
-        : LibrarySortOptionKey.ADDED_DESC;
+        : availableSortOptions.some((item) => item.key === this.state.selectedSortKey)
+          ? this.state.selectedSortKey
+          : sourceMode !== LibrarySourceMode.LOCAL
+            ? LibrarySortOptionKey.DEFAULT
+            : LibrarySortOptionKey.ADDED_DESC;
+    const previousFocusIndex = this.state.visibleItems.length
+      ? this.posterFocusIndex()
+      : persistedFilterSelections?.profileKey === activeProfileKey()
+        ? persistedFilterSelections.posterFocusIndex
+        : -1;
     const manageSelectedListKey =
       this.state.manageSelectedListKey &&
       listTabs.some(
@@ -646,10 +737,14 @@ export class LibraryController {
       selectedGenre,
       selectedYear,
       selectedSortKey,
+      providerSortOrder: null,
       manageSelectedListKey,
       isNuvioAccount: sourceMode === LibrarySourceMode.LOCAL && AuthManager.isAuthenticated,
       isTraktAuthenticated: sourceMode === LibrarySourceMode.TRAKT,
       isSimklAuthenticated: sourceMode === LibrarySourceMode.SIMKL,
+      ...(sourceMode === LibrarySourceMode.MDBLIST
+        ? { errorMessage: trackingErrorMessage(MdbListLibrary.error()) || null }
+        : {}),
       watchedTitleIds: buildWatchedTitleIdSet(watchedItems),
       isLoading: false,
       isSyncing: false,
@@ -657,7 +752,14 @@ export class LibraryController {
       pickerFocusIndex: 0
     };
     this.state.visibleItems = sortForState(this.state.allItems, this.state);
+    // A removed title keeps the grid position by focusing the card that took its slot.
+    if (previousFocusIndex >= 0 && this.posterFocusIndex() < 0 && this.state.visibleItems.length) {
+      const item =
+        this.state.visibleItems[Math.min(previousFocusIndex, this.state.visibleItems.length - 1)];
+      this.setFocusedPosterKey(`${item.type}:${item.id}`);
+    }
     this.onChange(this.getState());
+    void this.loadMdbListSortOrder();
 
     void watchedTitleStateRepository
       .getTitleWatchedItems(allItems, { baseWatchedItems: watchedItems, limit: 5000 })
@@ -708,6 +810,7 @@ export class LibraryController {
     if (this.state.sourceMode === LibrarySourceMode.TRAKT) {
       return t("library_source_trakt", {}, "TRAKT");
     }
+    if (this.state.sourceMode === LibrarySourceMode.MDBLIST) return "MDBLIST";
     if (this.state.sourceMode === LibrarySourceMode.SIMKL) {
       return "SIMKL";
     }
@@ -755,43 +858,63 @@ export class LibraryController {
     return labels[this.state.selectedWatchedFilter] || labels[LIBRARY_WATCHED_FILTER.ALL];
   }
 
+  isEmptyStateTrackingSignedOut(sourceMode) {
+    if (sourceMode === LibrarySourceMode.TRAKT) {
+      return !this.state.isTraktAuthenticated;
+    }
+    if (sourceMode === LibrarySourceMode.SIMKL) {
+      return !this.state.isSimklAuthenticated;
+    }
+    return false;
+  }
+
+  // Android LibraryScreen: one title for every type, hints per source.
   getEmptyStateTitle() {
-    const selectedTypeLabel = typeLabelForEmptyState(this.state.selectedTypeKey);
-    if (this.state.sourceMode === LibrarySourceMode.TRAKT && !this.state.isTraktAuthenticated) {
+    const sourceMode = this.state.sourceMode;
+    if (sourceMode === LibrarySourceMode.TRAKT && this.isEmptyStateTrackingSignedOut(sourceMode)) {
       return t("library_empty_trakt_not_auth_title", {}, "Trakt not connected");
     }
-    if (this.state.sourceMode === LibrarySourceMode.TRAKT) {
-      return t(
-        "library_empty_trakt_title",
-        [selectedTypeLabel],
-        `No ${selectedTypeLabel} in this list`
-      );
+    if (sourceMode === LibrarySourceMode.SIMKL && this.isEmptyStateTrackingSignedOut(sourceMode)) {
+      return t("library_empty_simkl_not_auth_title", {}, "Simkl not connected");
     }
-    if (this.state.sourceMode === LibrarySourceMode.SIMKL) {
-      return `No ${selectedTypeLabel} in this Simkl status`;
-    }
-    return t("library_empty_local_title", [selectedTypeLabel], `No ${selectedTypeLabel} yet`);
+    return t("library_empty_title", {}, "No items to display");
   }
 
   getEmptyStateSubtitle() {
-    if (this.state.sourceMode === LibrarySourceMode.TRAKT && !this.state.isTraktAuthenticated) {
+    const sourceMode = this.state.sourceMode;
+    if (sourceMode === LibrarySourceMode.TRAKT && this.isEmptyStateTrackingSignedOut(sourceMode)) {
       return t(
         "library_empty_trakt_not_auth_subtitle",
         {},
         "Connect your Trakt account in Settings to view your Trakt library"
       );
     }
-    if (this.state.sourceMode === LibrarySourceMode.TRAKT) {
+    if (sourceMode === LibrarySourceMode.SIMKL && this.isEmptyStateTrackingSignedOut(sourceMode)) {
       return t(
-        "library_empty_trakt_subtitle",
+        "library_empty_simkl_not_auth_subtitle",
         {},
-        "Use + in details to add items to watchlist or lists"
+        "Connect your Simkl account in Settings to view your Simkl library"
       );
     }
-    if (this.state.sourceMode === LibrarySourceMode.SIMKL) {
-      return "Use + in details to move items between Simkl statuses";
+    if (sourceMode === LibrarySourceMode.TRAKT || sourceMode === LibrarySourceMode.MDBLIST) {
+      return t(
+        "library_empty_trakt_hint",
+        {},
+        "Change your filters or use + in details to add items to watchlist or lists"
+      );
     }
-    return t("library_empty_local_subtitle", {}, "Start saving your favorites to see them here");
+    if (sourceMode === LibrarySourceMode.SIMKL) {
+      return t(
+        "library_empty_simkl_hint",
+        {},
+        "Change your filters or use + in details to add items to a Simkl status"
+      );
+    }
+    return t(
+      "library_empty_local_hint",
+      {},
+      "Change your filters or start saving your favorites to see them here"
+    );
   }
 
   getPickerOptions(picker) {
@@ -967,8 +1090,9 @@ export class LibraryController {
   }
 
   async selectViewMode(mode) {
-    const normalized =
-      mode === LIBRARY_VIEW_MODE.CLOUD ? LIBRARY_VIEW_MODE.CLOUD : LIBRARY_VIEW_MODE.SAVED;
+    const normalized = Object.values(LIBRARY_VIEW_MODE).includes(mode)
+      ? mode
+      : LIBRARY_VIEW_MODE.SAVED;
     persistedLibraryViewMode = normalized;
     this.setState({ viewMode: normalized, expandedPicker: null });
     if (normalized === LIBRARY_VIEW_MODE.CLOUD && !this.state.cloudLibrary.isLoaded) {
@@ -991,7 +1115,7 @@ export class LibraryController {
     } catch (error) {
       if (this.disposed) return false;
       this.setTransientMessage(
-        String(error?.message || "") ||
+        String(trackingErrorMessage(error) || "") ||
           t("cloud_library_load_failed", { provider: "" }, "Could not load cloud library")
       );
       this.setState({
@@ -1061,7 +1185,7 @@ export class LibraryController {
       if (!this.disposed) {
         this.setState({ resolvingCloudFileKey: null });
         this.setTransientMessage(
-          String(error?.message || "") ||
+          String(trackingErrorMessage(error) || "") ||
             t("cloud_library_play_failed", {}, "Could not play this cloud file.")
         );
       }
@@ -1076,11 +1200,13 @@ export class LibraryController {
   selectList(key) {
     LibraryPreferencesStore.setLastSelectedListKey(key);
     this.setState({
+      providerSortOrder: null,
       selectedListKey: key,
       selectedTypeKey: ALL_KEY,
       expandedPicker: null,
       pickerFocusIndex: 0
     });
+    void this.loadMdbListSortOrder();
   }
 
   selectType(key) {
@@ -1122,6 +1248,7 @@ export class LibraryController {
     this.state = {
       ...this.state,
       selectedSortKey: key,
+      providerSortOrder: null,
       expandedPicker: null,
       pickerFocusIndex: 0
     };
@@ -1130,6 +1257,38 @@ export class LibraryController {
     this.state.lastFocusedPosterKey = firstItem ? `${firstItem.type}:${firstItem.id}` : null;
     persistedPosterFocusKey = this.state.lastFocusedPosterKey;
     this.onChange(this.getState());
+    void this.loadMdbListSortOrder();
+  }
+
+  async loadMdbListSortOrder() {
+    if (
+      this.state.sourceMode !== LibrarySourceMode.MDBLIST ||
+      !["added_asc", "added_desc", "released_asc", "released_desc"].includes(
+        this.state.selectedSortKey
+      ) ||
+      !this.state.selectedListKey
+    )
+      return;
+    const token = this.reloadToken,
+      listKey = this.state.selectedListKey,
+      sortKey = this.state.selectedSortKey;
+    const current = () =>
+      !this.disposed &&
+      token === this.reloadToken &&
+      this.state.sourceMode === LibrarySourceMode.MDBLIST &&
+      this.state.selectedListKey === listKey &&
+      this.state.selectedSortKey === sortKey;
+    try {
+      const keys = await MdbListLibrary.order(listKey, sortKey);
+      if (current()) this.setState({ providerSortOrder: { listKey, sortKey, keys } });
+    } catch (error) {
+      if (current())
+        this.setState({
+          selectedSortKey: LibrarySortOptionKey.DEFAULT,
+          providerSortOrder: null,
+          errorMessage: trackingErrorMessage(error) || t("mdblist_unavailable")
+        });
+    }
   }
 
   setFocusedPosterKey(key) {
@@ -1189,7 +1348,8 @@ export class LibraryController {
         mode: "edit",
         listId: selected.traktListId || selected.key.replace("personal:", ""),
         name: selected.title,
-        description: selected.description || "",
+        description:
+          this.state.sourceMode === LibrarySourceMode.MDBLIST ? "" : selected.description || "",
         privacy: selected.privacy || LibraryListPrivacy.PRIVATE
       },
       errorMessage: null
@@ -1247,7 +1407,11 @@ export class LibraryController {
           editor.description.trim() || null,
           editor.privacy
         );
-        this.setTransientMessage("List created");
+        this.setTransientMessage(
+          this.state.sourceMode === LibrarySourceMode.MDBLIST
+            ? t("library_list_created")
+            : "List created"
+        );
         await this.reload({ preserveOverlay: true });
         this.setState({
           pendingOperation: false,
@@ -1261,7 +1425,11 @@ export class LibraryController {
           editor.description.trim() || null,
           editor.privacy
         );
-        this.setTransientMessage("List updated");
+        this.setTransientMessage(
+          this.state.sourceMode === LibrarySourceMode.MDBLIST
+            ? t("library_list_updated")
+            : "List updated"
+        );
         await this.reload({ preserveOverlay: true });
         this.setState({
           pendingOperation: false,
@@ -1270,7 +1438,7 @@ export class LibraryController {
       }
     } catch (error) {
       this.setState({ pendingOperation: false });
-      this.setError(error?.message || "Failed to save list");
+      this.setError(trackingErrorMessage(error) || "Failed to save list");
     }
   }
 
@@ -1286,7 +1454,11 @@ export class LibraryController {
       await libraryRepository.deletePersonalList(
         selected.traktListId || selected.key.replace("personal:", "")
       );
-      this.setTransientMessage("List deleted");
+      this.setTransientMessage(
+        this.state.sourceMode === LibrarySourceMode.MDBLIST
+          ? t("library_list_deleted")
+          : "List deleted"
+      );
       await this.reload({ preserveOverlay: true });
       this.setState({
         pendingOperation: false,
@@ -1294,7 +1466,7 @@ export class LibraryController {
       });
     } catch (error) {
       this.setState({ pendingOperation: false });
-      this.setError(error?.message || "Failed to delete list");
+      this.setError(trackingErrorMessage(error) || "Failed to delete list");
     }
   }
 
@@ -1327,7 +1499,7 @@ export class LibraryController {
       });
     } catch (error) {
       this.setState({ pendingOperation: false });
-      this.setError(error?.message || "Failed to reorder lists");
+      this.setError(trackingErrorMessage(error) || "Failed to reorder lists");
     }
   }
 
@@ -1350,7 +1522,8 @@ export class LibraryController {
     } catch (error) {
       this.setState({ isSyncing: false });
       this.setError(
-        error?.message || t("library_error_refresh_failed", {}, "Failed to refresh library")
+        trackingErrorMessage(error) ||
+          t("library_error_refresh_failed", {}, "Failed to refresh library")
       );
     }
   }

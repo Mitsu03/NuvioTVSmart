@@ -47,16 +47,22 @@ function normalizeFolderViewMode(value) {
 
 function normalizeTmdbFilters(value = {}) {
   const raw = value && typeof value === "object" ? value : {};
+  const nullableNumber = (value) => {
+    if (value == null || (typeof value === "string" && value.trim() === "")) {
+      return null;
+    }
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const voteCountGte = nullableNumber(raw.voteCountGte);
   return {
     withGenres: stringOrNull(raw.withGenres),
     withoutGenres: stringOrNull(raw.withoutGenres),
     releaseDateGte: stringOrNull(raw.releaseDateGte),
     releaseDateLte: stringOrNull(raw.releaseDateLte),
-    voteAverageGte: Number.isFinite(Number(raw.voteAverageGte)) ? Number(raw.voteAverageGte) : null,
-    voteAverageLte: Number.isFinite(Number(raw.voteAverageLte)) ? Number(raw.voteAverageLte) : null,
-    voteCountGte: Number.isFinite(Number(raw.voteCountGte))
-      ? Math.trunc(Number(raw.voteCountGte))
-      : null,
+    voteAverageGte: nullableNumber(raw.voteAverageGte),
+    voteAverageLte: nullableNumber(raw.voteAverageLte),
+    voteCountGte: voteCountGte == null ? null : Math.trunc(voteCountGte),
     withOriginalLanguage: stringOrNull(raw.withOriginalLanguage),
     withOriginCountry: stringOrNull(raw.withOriginCountry),
     withKeywords: stringOrNull(raw.withKeywords),

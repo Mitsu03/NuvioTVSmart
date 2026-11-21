@@ -6,6 +6,8 @@ import { buildOrderedHomeCatalogItems, toDisplayTypeLabel } from "../core/addons
 import { LibrarySyncService } from "../core/profile/librarySyncService.js";
 import { ProfileSettingsSyncService } from "../core/profile/profileSettingsSyncService.js";
 import { HomeCatalogSettingsSyncService } from "../core/profile/homeCatalogSettingsSyncService.js";
+import { I18n } from "../i18n/index.js";
+import { isTrackingAddon } from "../data/repository/addonEventDispatcher.js";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -47,7 +49,7 @@ function clonePrefs(prefs = {}) {
 }
 
 function createShell() {
-  document.title = "Nuvio TV - Manage Addons";
+  document.title = I18n.t("addon_remote_title");
   document.body.innerHTML = `
     <div class="addon-remote-shell">
       <style>
@@ -123,6 +125,24 @@ function createShell() {
         }
         .addon-remote-input::placeholder {
           color: rgba(255, 255, 255, 0.28);
+        }
+        .addon-remote-consent {
+          margin-top: 12px;
+          padding: 14px;
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.04);
+        }
+        .addon-remote-consent-body {
+          margin: 6px 0 10px;
+          line-height: 1.4;
+          opacity: 0.85;
+        }
+        .addon-remote-consent-check {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-bottom: 12px;
         }
         .addon-remote-error {
           min-height: 20px;
@@ -301,12 +321,12 @@ const AddonRemotePage = {
   async addAddon() {
     const normalizedUrl = normalizeAddonUrl(this.addonDraft);
     if (!normalizedUrl) {
-      this.addError = "Enter a valid http or https addon URL.";
+      this.addError = I18n.t("addon_remote_invalid_url");
       this.render();
       return;
     }
     if (this.draftAddons.some((addon) => addon.baseUrl === normalizedUrl)) {
-      this.addError = "That addon is already in the list.";
+      this.addError = I18n.t("addon_remote_duplicate_addon");
       this.render();
       return;
     }
@@ -317,15 +337,49 @@ const AddonRemotePage = {
 
     const result = await addonRepository.fetchAddon(normalizedUrl);
     if (result.status !== "success") {
-      this.addError = result.message || "Unable to load that addon.";
+      this.addError = result.message || I18n.t("addon_remote_load_failed");
       this.render();
       return;
     }
 
-    this.draftAddons = [...this.draftAddons, result.data];
+    if (isTrackingAddon(result.data)) {
+      // Android: a tracking add-on is added only once the consent box is ticked.
+      this.pendingTrackingAddon = result.data;
+      this.trackingConsentChecked = false;
+      this.render();
+      return;
+    }
+    this.acceptAddon(result.data);
+  },
+
+  acceptAddon(addon) {
+    this.draftAddons = [...this.draftAddons, addon];
     this.addonDraft = "";
     this.rebuildCatalogItems();
     this.render();
+  },
+
+  renderTrackingConsent() {
+    const addon = this.pendingTrackingAddon;
+    if (!addon) {
+      return "";
+    }
+    const name = addon.displayName || addon.name || addon.baseUrl || "";
+    return `
+        <div class="addon-remote-consent" role="dialog" aria-modal="true">
+          <p class="addon-remote-label">${escapeHtml(I18n.t("addon_tracking_consent_title"))}</p>
+          <p class="addon-remote-consent-body">${escapeHtml(I18n.t("addon_tracking_consent_body", [name]))}</p>
+          <label class="addon-remote-consent-check">
+            <input type="checkbox" data-action="tracking-consent" ${this.trackingConsentChecked ? "checked" : ""} />
+            <span>${escapeHtml(I18n.t("addon_tracking_consent_checkbox"))}</span>
+          </label>
+          <div class="addon-remote-add">
+            <button class="addon-remote-btn" data-action="tracking-cancel">${escapeHtml(I18n.t("addon_tracking_consent_cancel"))}</button>
+            <button class="addon-remote-btn" data-action="tracking-install" ${this.trackingConsentChecked ? "" : "disabled"}>${escapeHtml(
+              I18n.t("addon_tracking_consent_install")
+            )}</button>
+          </div>
+        </div>`;
   },
 
   moveAddon(index, delta) {
@@ -399,11 +453,11 @@ const AddonRemotePage = {
 
       this.savedState = this.buildCurrentState();
       this.statusMessage = AuthManager.isAuthenticated
-        ? "Addon and home catalog changes saved and pushed to your synced profile."
-        : "Changes saved in this browser.";
+        ? I18n.t("addon_remote_saved_synced")
+        : I18n.t("addon_remote_saved_local");
     } catch (error) {
       console.warn("Addon remote save failed", error);
-      this.statusMessage = "Could not save changes.";
+      this.statusMessage = I18n.t("addon_remote_save_failed");
     } finally {
       this.isSaving = false;
       this.render();
@@ -428,6 +482,29 @@ const AddonRemotePage = {
 
     this.root.querySelector("[data-action='add']")?.addEventListener("click", async () => {
       await this.addAddon();
+    });
+
+    this.root
+      .querySelector("[data-action='tracking-consent']")
+      ?.addEventListener("change", (event) => {
+        this.trackingConsentChecked = Boolean(event.target?.checked);
+        this.render();
+      });
+
+    this.root.querySelector("[data-action='tracking-cancel']")?.addEventListener("click", () => {
+      this.pendingTrackingAddon = null;
+      this.trackingConsentChecked = false;
+      this.render();
+    });
+
+    this.root.querySelector("[data-action='tracking-install']")?.addEventListener("click", () => {
+      const addon = this.pendingTrackingAddon;
+      if (!addon || !this.trackingConsentChecked) {
+        return;
+      }
+      this.pendingTrackingAddon = null;
+      this.trackingConsentChecked = false;
+      this.acceptAddon(addon);
     });
 
     this.root.querySelector("[data-action='save']")?.addEventListener("click", async () => {
@@ -478,9 +555,9 @@ const AddonRemotePage = {
 
     const infoBanner = this.authReady
       ? AuthManager.isAuthenticated
-        ? "Signed in. Addon and home catalog changes can be pushed through the web sync backend."
-        : "Signed out. Changes save only in this browser unless you sign in on this phone."
-      : "Checking account state...";
+        ? I18n.t("addon_remote_signed_in")
+        : I18n.t("addon_remote_signed_out")
+      : I18n.t("addon_remote_checking_account");
 
     const addonCards = this.draftAddons.length
       ? this.draftAddons
@@ -488,8 +565,8 @@ const AddonRemotePage = {
             (addon, index) => `
           <article class="addon-remote-card">
             <div class="addon-remote-order">
-              <button class="addon-remote-btn" data-addon-up="${index}" ${index === 0 ? "disabled" : ""}>Up</button>
-              <button class="addon-remote-btn" data-addon-down="${index}" ${index === this.draftAddons.length - 1 ? "disabled" : ""}>Down</button>
+              <button class="addon-remote-btn" data-addon-up="${index}" ${index === 0 ? "disabled" : ""}>${I18n.t("addon_remote_move_up")}</button>
+              <button class="addon-remote-btn" data-addon-down="${index}" ${index === this.draftAddons.length - 1 ? "disabled" : ""}>${I18n.t("addon_remote_move_down")}</button>
             </div>
             <div class="addon-remote-copy">
               <strong>${escapeHtml(addon.displayName || addon.name || addon.baseUrl)}</strong>
@@ -497,13 +574,13 @@ const AddonRemotePage = {
               ${addon.description ? `<span>${escapeHtml(addon.description)}</span>` : ""}
             </div>
             <div class="addon-remote-actions">
-              <button class="addon-remote-btn addon-remote-btn-danger" data-addon-remove="${index}">Remove</button>
+              <button class="addon-remote-btn addon-remote-btn-danger" data-addon-remove="${index}">${I18n.t("addon_remote_remove")}</button>
             </div>
           </article>
         `
           )
           .join("")
-      : '<div class="addon-remote-empty">No addons in this draft yet.</div>';
+      : `<div class="addon-remote-empty">${I18n.t("addon_remote_no_addons_draft")}</div>`;
 
     const catalogCards = this.catalogItems.length
       ? this.catalogItems
@@ -511,57 +588,58 @@ const AddonRemotePage = {
             (item, index) => `
           <article class="addon-remote-card">
             <div class="addon-remote-order">
-              <button class="addon-remote-btn" data-catalog-up="${index}" ${index === 0 ? "disabled" : ""}>Up</button>
-              <button class="addon-remote-btn" data-catalog-down="${index}" ${index === this.catalogItems.length - 1 ? "disabled" : ""}>Down</button>
+              <button class="addon-remote-btn" data-catalog-up="${index}" ${index === 0 ? "disabled" : ""}>${I18n.t("addon_remote_move_up")}</button>
+              <button class="addon-remote-btn" data-catalog-down="${index}" ${index === this.catalogItems.length - 1 ? "disabled" : ""}>${I18n.t("addon_remote_move_down")}</button>
             </div>
             <div class="addon-remote-copy">
-              <strong>${escapeHtml(item.catalogName)}${item.isDisabled ? ' <span style="color:#ffb5c0;">Disabled</span>' : ""}</strong>
+              <strong>${escapeHtml(item.catalogName)}${item.isDisabled ? ` <span style="color:#ffb5c0;">${I18n.t("addon_remote_disabled")}</span>` : ""}</strong>
               <span>${escapeHtml(`${item.addonName} - ${toDisplayTypeLabel(item.type)}`)}</span>
             </div>
             <div class="addon-remote-actions">
               <button class="addon-remote-btn addon-remote-btn-toggle${item.isDisabled ? " is-disabled" : ""}"
                       data-catalog-toggle="${escapeHtml(item.disableKey)}">
-                ${item.isDisabled ? "Enable" : "Disable"}
+                ${item.isDisabled ? I18n.t("addon_remote_enable") : I18n.t("addon_remote_disable")}
               </button>
             </div>
           </article>
         `
           )
           .join("")
-      : '<div class="addon-remote-empty">No Home catalogs available from the current addons.</div>';
+      : `<div class="addon-remote-empty">${I18n.t("addon_remote_no_home_catalogs")}</div>`;
 
     this.root.innerHTML = `
       <header class="addon-remote-header">
-        <h1>Addons</h1>
-        <p>Manage addons and home catalogs from your phone.</p>
+        <h1>${I18n.t("addon_remote_heading")}</h1>
+        <p>${I18n.t("addon_remote_subtitle")}</p>
         <div class="addon-remote-banner${AuthManager.isAuthenticated ? "" : " is-warn"}">${escapeHtml(infoBanner)}</div>
       </header>
 
       <section class="addon-remote-section">
-        <p class="addon-remote-label">Add addon</p>
+        <p class="addon-remote-label">${I18n.t("addon_remote_add_addon")}</p>
         <div class="addon-remote-add">
           <input class="addon-remote-input"
                  type="url"
                  value="${escapeHtml(this.addonDraft)}"
                  placeholder="https://example.com/manifest.json"
                  data-action="draft" />
-          <button class="addon-remote-btn" data-action="add">Add</button>
+          <button class="addon-remote-btn" data-action="add">${I18n.t("addon_remote_add")}</button>
         </div>
         <div class="addon-remote-error">${escapeHtml(this.addError)}</div>
+        ${this.renderTrackingConsent()}
       </section>
 
       <section class="addon-remote-section">
-        <p class="addon-remote-label">Installed addons</p>
-        <div class="addon-remote-list">${this.isBootstrapping ? '<div class="addon-remote-empty">Loading addons...</div>' : addonCards}</div>
+        <p class="addon-remote-label">${I18n.t("addon_remote_installed_addons")}</p>
+        <div class="addon-remote-list">${this.isBootstrapping ? `<div class="addon-remote-empty">${I18n.t("addon_remote_loading_addons")}</div>` : addonCards}</div>
       </section>
 
       <section class="addon-remote-section">
-        <p class="addon-remote-label">Home catalogs</p>
-        <div class="addon-remote-list">${this.isBootstrapping ? '<div class="addon-remote-empty">Loading catalogs...</div>' : catalogCards}</div>
+        <p class="addon-remote-label">${I18n.t("addon_remote_home_catalogs")}</p>
+        <div class="addon-remote-list">${this.isBootstrapping ? `<div class="addon-remote-empty">${I18n.t("addon_remote_loading_catalogs")}</div>` : catalogCards}</div>
       </section>
 
       <button class="addon-remote-save" data-action="save" ${this.isSaving || !this.isDirty() ? "disabled" : ""}>
-        ${this.isSaving ? "Saving..." : "Save changes"}
+        ${this.isSaving ? I18n.t("addon_remote_saving") : I18n.t("addon_remote_save_changes")}
       </button>
       <div class="addon-remote-status">${escapeHtml(this.statusMessage)}</div>
     `;

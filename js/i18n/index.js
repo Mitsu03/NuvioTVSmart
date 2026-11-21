@@ -7,6 +7,7 @@ const SUPPORTED_LOCALES = [
   "en",
   "ar",
   "bg",
+  "bn",
   "bs",
   "cs",
   "da",
@@ -17,6 +18,7 @@ const SUPPORTED_LOCALES = [
   "fr",
   "he",
   "hi",
+  "hr",
   "hu",
   "id",
   "it",
@@ -49,6 +51,7 @@ const KEY_ALIASES = {
   "common.normal": "player_speed_normal",
   "common.notSet": "mdblist_not_set",
   "common.off": "subtitle_off",
+  "common.on": "subtitle_style_on",
   "common.retry": "action_retry",
   "common.save": "action_save",
   "common.systemDefault": "appearance_language_system",
@@ -82,7 +85,10 @@ const KEY_ALIASES = {
   "settings.about.version": "about_version",
   "settings.dialogs.backdropExpandDelay": "layout_expand_delay",
   "settings.dialogs.modernTrailerPlaybackLocation": "layout_trailer_location",
+  "settings.dialogs.performanceMode": "layout_animations_effects",
   "settings.dialogs.preferredAudioLanguage": "audio_preferred_lang",
+  "settings.performance.mode.subtitle": "layout_animations_effects_sub",
+  "settings.performance.mode.title": "layout_animations_effects",
   "settings.dialogs.selectFont": "appearance_font_dialog_title",
   "settings.dialogs.selectLanguage": "appearance_language_dialog_title",
   "settings.dialogs.selectTmdbLanguage": "tmdb_language_dialog_title",
@@ -498,10 +504,15 @@ function resolvePreferredLocale(preferred = null) {
 function interpolate(template, params = {}) {
   const values = Array.isArray(params) ? params : Object.values(params || {});
   let sequentialIndex = 0;
+  // Like Android's String.format, "%%" becomes "%" only when the string is
+  // formatted with arguments; a plain getString() keeps the text as written.
+  const formatted = values.length > 0;
   return String(template || "")
     .replace(/\{\{(\w+)\}\}/g, (_, key) => String(params?.[key] ?? ""))
-    .replace(/%(\d+)\$[a-z]/gi, (_, index) => String(values[Number(index) - 1] ?? ""))
-    .replace(/%[a-z]/gi, () => String(values[sequentialIndex++] ?? ""))
+    .replace(/%%|%(\d+)\$[a-z]|%[a-z]/gi, (match, index) => {
+      if (match === "%%") return formatted ? "%" : match;
+      return String((index ? values[Number(index) - 1] : values[sequentialIndex++]) ?? "");
+    })
     .replace(/\\'/g, "'")
     .replace(/\\"/g, '"');
 }
@@ -715,6 +726,19 @@ export const I18n = {
 
     warnMissingKey(locale, key);
     return interpolate(options?.fallback ?? key, params);
+  },
+
+  getQuantityString(key, count, params = [count]) {
+    const locale = this.getLocale();
+    let category = Number(count) === 1 ? "one" : "other";
+    try {
+      if (typeof globalThis.Intl?.PluralRules === "function")
+        category = new Intl.PluralRules(locale).select(Number(count));
+    } catch (_) {
+      /* Fall back to the available one/other forms on older TVs. */
+    }
+    const selected = `${key}_${category}`;
+    return this.t(typeof activeMessages[selected] === "string" ? selected : `${key}_other`, params);
   },
 
   apply() {

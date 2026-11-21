@@ -1,11 +1,14 @@
+import { syncHtmlSubtitleClearance } from "./subtitleOverlayClearance.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
 export function createPlayerScreenMethods24() {
   const {
+    SubtitleAppearance,
     PlayerController,
     PlayerSettingsStore,
     Environment,
+    resolveHdrSubtitleStyle,
     Router,
     getSubtitleVerticalOffsetVh,
     getSubtitleVerticalResidualOffsetVh,
@@ -73,6 +76,10 @@ export function createPlayerScreenMethods24() {
       return true;
     },
     async playNextEpisode({ userInitiated = false } = {}) {
+      if (this.isPartyControlLocked?.()) {
+        if (userInitiated) this.partyBlocksControl();
+        return false;
+      }
       const nextEpisode = this.resolveNextEpisodeInfo();
       const itemType = normalizeItemType(this.params?.itemType || "movie");
       if (!nextEpisode?.videoId || !isSeriesItemType(itemType) || nextEpisode.hasAired === false || this.nextEpisodeLaunching) {
@@ -172,6 +179,8 @@ export function createPlayerScreenMethods24() {
             streamCandidates: streamItems,
             preferredStreamId: bestStreamCandidate.id || null,
             playbackSourceContext: this.getPlaybackSourceContext(bestStreamCandidate),
+            // Android: the next episode's auto-selected source falls back too.
+            autoPlayNav: true,
             returnToStreamOnBack: false,
             returnHomeOnBack: this.buildDetailRouteParamsFromPlayer().returnHomeOnBack,
             nextEpisodeVideoId: followingEpisode?.id || null,
@@ -264,28 +273,60 @@ export function createPlayerScreenMethods24() {
         return;
       }
       const style = this.subtitleStyleSettings || {};
+      const hdrStyle = resolveHdrSubtitleStyle(style, this.isCurrentPlaybackHdr?.() === true);
+      const assRenderer = this.assSubtitleRenderer;
+      if (assRenderer?.sourceBody && assRenderer.stripSdh !== Boolean(style.stripSdh)) {
+        const selectionToken = this.subtitleSelectionToken;
+        void this.applyAssSubtitleBody({ body: assRenderer.sourceBody, selectionToken })
+          .then((result) => {
+            if (
+              result.applied ||
+              result.stale ||
+              this.assSubtitleRenderer ||
+              selectionToken !== this.subtitleSelectionToken ||
+              !result.fallbackVtt
+            )
+              return;
+            this.clearHtmlSubtitleOverlay();
+            this.htmlSubtitleCues = this.parseSubtitleCues(result.fallbackVtt);
+            this.htmlSubtitleSelectedId = this.selectedAddonSubtitleId || "ass-fallback";
+            this.webOsEmbeddedTextSubtitleUsingAss = false;
+            this.webOsEmbeddedTextSubtitleUsingHtml = Boolean(this.webOsEmbeddedTextSubtitleTrack);
+            this.renderHtmlSubtitleOverlayAtCurrentTime();
+            this.scheduleHtmlSubtitleOverlayRender();
+          })
+          .catch((error) => console.warn("ASS subtitle refresh failed", error));
+      }
+      if (this.htmlSubtitleCues?.length) this.renderHtmlSubtitleOverlayAtCurrentTime();
+      else if (this.htmlSubtitleLastActiveCues?.length) this.renderHtmlSubtitleOverlayCue(this.htmlSubtitleLastActiveCues);
       const verticalOffsetVh = getSubtitleVerticalOffsetVh(style.verticalOffset);
       const residualOffsetVh = getSubtitleVerticalResidualOffsetVh(style.verticalOffset);
       const subtitleTextOpacity = normalizeSubtitleTextOpacity(style.textOpacity);
-      const subtitleTextColor = String(style.textColor || "#FFFFFF");
+      const subtitleTextColor = hdrStyle.textColor;
       const subtitleColor = subtitleTextColorWithOpacity(subtitleTextColor, subtitleTextOpacity);
-      const outlineColor = String(style.outlineColor || "#000000");
+      const outlineColor = hdrStyle.outlineColor;
       const subtitleFontWeight = style.bold ? "800" : Environment.isWebOS() ? "400" : "500";
       const boldShadow = style.bold
         ? `0.45px 0 0 ${subtitleColor}, -0.45px 0 0 ${subtitleColor}, 0 0.45px 0 ${subtitleColor}, 0 -0.45px 0 ${subtitleColor}`
         : "";
-      const outlineShadow = style.outlineEnabled
-        ? Environment.isWebOS()
-          ? `-2px -2px 0 ${outlineColor}, 0 -2px 0 ${outlineColor}, 2px -2px 0 ${outlineColor}, -2px 0 0 ${outlineColor}, 2px 0 0 ${outlineColor}, -2px 2px 0 ${outlineColor}, 0 2px 0 ${outlineColor}, 2px 2px 0 ${outlineColor}`
-          : `0 0 2px ${outlineColor}, 0 0 4px ${outlineColor}`
-        : "";
-      const subtitleShadow = [outlineShadow, boldShadow].filter(Boolean).join(", ") || "none";
-      const htmlSubtitleShadow = Environment.isWebOS() ? outlineShadow || "none" : subtitleShadow;
-      const htmlSubtitleFontFamily = Environment.isWebOS()
-        ? style.bold
-          ? '"NuvioSubtitleBold", "Roboto", Arial, sans-serif'
-          : '"NuvioSubtitleRegular", "Roboto", Arial, sans-serif'
-        : "";
+      const outlineShadow = SubtitleAppearance.subtitleOutlineShadowCss(style, {
+        color: outlineColor,
+        crisp: Environment.isWebOS()
+      });
+      // Android drop shadow (offset, blurred black) under the text fill.
+      const dropShadow = SubtitleAppearance.subtitleDropShadowCss(style);
+      const subtitleShadow = [outlineShadow, boldShadow, dropShadow === "none" ? "" : dropShadow].filter(Boolean).join(", ") || "none";
+      const htmlSubtitleShadow = Environment.isWebOS()
+        ? outlineShadow || "none"
+        : [outlineShadow, boldShadow].filter(Boolean).join(", ") || "none";
+      const chosenFontFamily = SubtitleAppearance.subtitleFontFamilyCss(style.fontId);
+      const htmlSubtitleFontFamily =
+        chosenFontFamily ||
+        (Environment.isWebOS()
+          ? style.bold
+            ? '"NuvioSubtitleBold", "Roboto", Arial, sans-serif'
+            : '"NuvioSubtitleRegular", "Roboto", Arial, sans-serif'
+          : "");
       const subtitleFontSize = normalizeSubtitleFontSize(style.fontSize);
       const htmlSubtitleFontSize = formatHtmlSubtitleFontSize(subtitleFontSize);
       PlayerController.setWebOsSubtitleFontSize?.(subtitleFontSize);
@@ -299,26 +340,39 @@ export function createPlayerScreenMethods24() {
       // rgba color below.
       uiRoot.style.setProperty("--player-subtitle-text-color", subtitleTextColor);
       uiRoot.style.setProperty("--player-subtitle-text-opacity", String(subtitleTextOpacity / 100));
-      uiRoot.style.setProperty("--player-subtitle-background", String(style.backgroundColor || "#00000000"));
+      uiRoot.style.setProperty("--player-subtitle-background", hdrStyle.backgroundColor);
       uiRoot.style.setProperty("--player-subtitle-outline-color", outlineColor);
       uiRoot.style.setProperty("--player-subtitle-font-size", `${subtitleFontSize}%`);
       uiRoot.style.setProperty("--player-html-subtitle-font-size", htmlSubtitleFontSize);
-      if (Environment.isWebOS()) {
+      if (htmlSubtitleFontFamily) {
         uiRoot.style.setProperty("--player-html-subtitle-font-family", htmlSubtitleFontFamily);
       } else {
         uiRoot.style.removeProperty("--player-html-subtitle-font-family");
+      }
+      uiRoot.style.setProperty("--player-subtitle-drop-shadow", dropShadow);
+      uiRoot.style.setProperty("--player-subtitle-background-radius", SubtitleAppearance.subtitleBackgroundRadiusCss(style));
+      // Android draws one rounded background around the widest line of a cue.
+      this.uiRefs?.htmlSubtitles?.classList.toggle(
+        "player-html-subtitles-block-background",
+        SubtitleAppearance.hasVisibleSubtitleBackground(hdrStyle.backgroundColor)
+      );
+      if (chosenFontFamily) {
+        video.style.setProperty("--player-subtitle-font-family", chosenFontFamily);
+      } else {
+        video.style.removeProperty("--player-subtitle-font-family");
       }
       uiRoot.style.setProperty("--player-subtitle-font-weight", subtitleFontWeight);
       uiRoot.style.setProperty("--player-subtitle-shadow", htmlSubtitleShadow);
       uiRoot.style.setProperty("--player-subtitle-offset", `${verticalOffsetVh.toFixed(2)}vh`);
       video.style.setProperty("--player-subtitle-color", subtitleColor);
-      video.style.setProperty("--player-subtitle-background", String(style.backgroundColor || "#00000000"));
+      video.style.setProperty("--player-subtitle-background", hdrStyle.backgroundColor);
       video.style.setProperty("--player-subtitle-outline-color", outlineColor);
       video.style.setProperty("--player-subtitle-font-size", `${subtitleFontSize}%`);
       video.style.setProperty("--player-subtitle-font-weight", subtitleFontWeight);
       video.style.setProperty("--player-subtitle-shadow", subtitleShadow);
       video.style.setProperty("--player-subtitle-offset", `${residualOffsetVh.toFixed(2)}vh`);
       this.refreshSubtitleCueStyles();
+      syncHtmlSubtitleClearance(this);
       this.renderBitmapSubtitleAtCurrentTime({ force: true });
       if (refreshTrackRendering) {
         this.refreshSubtitleTrackRendering();

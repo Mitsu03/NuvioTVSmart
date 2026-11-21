@@ -222,6 +222,15 @@ function bindWebOsPlaybackKeepAwake(videoElement) {
 }
 
 export const WebOSPlayerExtensions = {
+  startAmbientKeepAwake(shouldKeepAwake) {
+    bindWebOsAppLifecycle();
+    requestKeepAwake("ambient-mode", shouldKeepAwake);
+  },
+
+  stopAmbientKeepAwake() {
+    releaseKeepAwake("ambient-mode");
+  },
+
   apply(videoElement) {
     if (!videoElement) {
       return;

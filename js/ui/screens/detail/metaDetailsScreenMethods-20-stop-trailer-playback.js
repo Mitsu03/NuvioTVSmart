@@ -115,11 +115,16 @@ export function createMetaDetailsScreenMethods20() {
         return;
       }
       this.stopTrailerPlaybackForNavigation();
-      const episode = this.episodes.find((entry) => entry.id === videoId) || null;
+      const shuffleResume = this.shuffleResumeProgress?.videoId === videoId ? this.shuffleResumeProgress : null;
+      const episode =
+        this.episodes.find((entry) => entry.id === videoId) ||
+        (shuffleResume
+          ? { id: videoId, season: shuffleResume.season, episode: shuffleResume.episode, title: shuffleResume.episodeTitle || "" }
+          : null);
       if (!episode) {
         return;
       }
-      const progress = this.getEpisodeMenuProgress(episode);
+      const progress = shuffleResume || this.getEpisodeMenuProgress(episode);
       this.navigateToStreamScreenForEpisode(episode, {
         ...this.getResumeParamsForProgress(progress, {
           ...options,

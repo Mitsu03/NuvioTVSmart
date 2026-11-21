@@ -1,8 +1,15 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
+import {
+  HDR_BRIGHTNESS_STEP,
+  isEditingHdrSubtitleStyle,
+  normalizeHdrBrightness,
+  normalizeHdrTextColor
+} from "../../../core/player/hdrSubtitleStyle.js";
 
 export function createPlayerScreenMethods53() {
   const {
+    SubtitleAppearance,
     PlayerController,
     PlayerSettingsStore,
     Environment,
@@ -20,7 +27,7 @@ export function createPlayerScreenMethods53() {
     SUBTITLE_VERTICAL_OFFSET_STEP,
     getEmbeddedSubtitleSupportState,
     isTizenEmbeddedTextSubtitleFallbackTrack,
-    canUseWebOsBitmapSubtitles,
+    canUseEmbeddedBitmapSubtitles,
     clamp,
     normalizeSubtitleFontSize
   } = internals;
@@ -32,10 +39,10 @@ export function createPlayerScreenMethods53() {
       const styleControls = this.getSubtitleStyleControls();
       const items = controlId === "reset" ? styleControls : styleControls.filter((c) => c.id === controlId);
       items.forEach((item) => {
-        const subNode = dialog
-          .querySelector(`button[data-style-id="${item.id}"]`)
-          ?.closest(".player-dialog-style-item")
-          ?.querySelector(".player-dialog-item-sub");
+        const rowNode = dialog.querySelector(`button[data-style-id="${item.id}"]`)?.closest(".player-dialog-style-item");
+        const mainNode = rowNode?.querySelector(".player-dialog-item-main");
+        if (mainNode) mainNode.textContent = item.label || "";
+        const subNode = rowNode?.querySelector(".player-dialog-item-sub");
         if (subNode) subNode.textContent = item.value || "";
       });
       return items.length > 0;
@@ -54,13 +61,55 @@ export function createPlayerScreenMethods53() {
         );
       } else if (controlId === "resetDelay") {
         this.subtitleDelayMs = 0;
+      } else if (controlId === "font" && delta !== 0) {
+        // Android cycles the fonts both ways.
+        const fonts = SubtitleAppearance.SUBTITLE_BUILT_IN_FONTS;
+        const index = Math.max(0, fonts.indexOf(SubtitleAppearance.normalizeSubtitleFontId(style.fontId)));
+        style.fontId = fonts[(index + delta + fonts.length) % fonts.length];
+      } else if (controlId === "backgroundColor" && delta !== 0) {
+        const presets = SubtitleAppearance.SUBTITLE_BACKGROUND_COLOR_PRESETS;
+        const current = SubtitleAppearance.splitSubtitleBackground(style.backgroundColor);
+        const index = current.opacity > 0 ? presets.indexOf(current.color) : -1;
+        const nextIndex = index < 0 ? 0 : clamp(index + delta, 0, presets.length - 1);
+        style.backgroundColor = SubtitleAppearance.subtitleBackgroundColorFor(presets[nextIndex], style.backgroundColor);
+      } else if (controlId === "backgroundOpacity") {
+        const current = SubtitleAppearance.splitSubtitleBackground(style.backgroundColor);
+        style.backgroundColor = SubtitleAppearance.joinSubtitleBackground(current.color, clamp(current.opacity + delta * 10, 0, 100));
+      } else if (controlId === "backgroundRadius") {
+        style.backgroundRadius = clamp(
+          SubtitleAppearance.normalizeSubtitleAppearance(style).backgroundRadius +
+            delta * SubtitleAppearance.SUBTITLE_BACKGROUND_RADIUS_STEP,
+          0,
+          SubtitleAppearance.SUBTITLE_BACKGROUND_RADIUS_MAX
+        );
+      } else if (controlId === "shadowEnabled" && delta !== 0) {
+        style.shadowEnabled = !SubtitleAppearance.normalizeSubtitleAppearance(style).shadowEnabled;
+      } else if (controlId === "shadowOpacity") {
+        style.shadowOpacity = clamp(SubtitleAppearance.normalizeSubtitleAppearance(style).shadowOpacity + delta * 10, 0, 100);
+      } else if (controlId === "shadowSize") {
+        style.shadowSize = clamp(
+          SubtitleAppearance.normalizeSubtitleAppearance(style).shadowSize + delta,
+          SubtitleAppearance.SUBTITLE_SHADOW_SIZE_MIN,
+          SubtitleAppearance.SUBTITLE_SHADOW_SIZE_MAX
+        );
       } else if (controlId === "fontSize") {
         style.fontSize = normalizeSubtitleFontSize(Number(style.fontSize || 120) + delta * SUBTITLE_FONT_STEP);
+      } else if (controlId === "stripSdh" && delta !== 0) {
+        style.stripSdh = !style.stripSdh;
       } else if (controlId === "bold" && delta !== 0) {
         style.bold = !style.bold;
       } else if (controlId === "textColor" && delta !== 0) {
-        const currentIndex = Math.max(0, SUBTITLE_TEXT_COLORS.indexOf(String(style.textColor || "#FFFFFF").toUpperCase()));
-        style.textColor = SUBTITLE_TEXT_COLORS[clamp(currentIndex + delta, 0, SUBTITLE_TEXT_COLORS.length - 1)];
+        const isEditingHdrStyle = isEditingHdrSubtitleStyle(style, this.isCurrentPlaybackHdr?.() === true);
+        const currentColor = isEditingHdrStyle
+          ? normalizeHdrTextColor(style.hdrTextColor)
+          : String(style.textColor || "#FFFFFF").toUpperCase();
+        const currentIndex = Math.max(0, SUBTITLE_TEXT_COLORS.indexOf(currentColor));
+        const nextColor = SUBTITLE_TEXT_COLORS[clamp(currentIndex + delta, 0, SUBTITLE_TEXT_COLORS.length - 1)];
+        if (isEditingHdrStyle) {
+          style.hdrTextColor = nextColor;
+        } else {
+          style.textColor = nextColor;
+        }
       } else if (controlId === "textOpacity") {
         style.textOpacity = normalizeSubtitleTextOpacity(Number(style.textOpacity ?? 100) + delta * SUBTITLE_TEXT_OPACITY_STEP);
       } else if (controlId === "outlineEnabled" && delta !== 0) {
@@ -68,10 +117,18 @@ export function createPlayerScreenMethods53() {
       } else if (controlId === "outlineColor" && delta !== 0) {
         const currentIndex = Math.max(0, SUBTITLE_OUTLINE_COLORS.indexOf(String(style.outlineColor || "#000000").toUpperCase()));
         style.outlineColor = SUBTITLE_OUTLINE_COLORS[clamp(currentIndex + delta, 0, SUBTITLE_OUTLINE_COLORS.length - 1)];
+      } else if (controlId === "outlineSize") {
+        style.outlineSize = clamp(
+          SubtitleAppearance.normalizeSubtitleAppearance(style).outlineSize + delta,
+          SubtitleAppearance.SUBTITLE_OUTLINE_SIZE_MIN,
+          SubtitleAppearance.SUBTITLE_OUTLINE_SIZE_MAX
+        );
       } else if (controlId === "verticalOffset") {
         style.verticalOffset = normalizeSubtitleVerticalOffset(
           Number(style.verticalOffset ?? SUBTITLE_VERTICAL_OFFSET_DEFAULT) + delta * SUBTITLE_VERTICAL_OFFSET_STEP
         );
+      } else if (controlId === "hdrBrightness") {
+        style.hdrBrightness = normalizeHdrBrightness(Number(style.hdrBrightness ?? 40) + delta * HDR_BRIGHTNESS_STEP);
       } else if (controlId === "reset") {
         const defaults = PlayerSettingsStore.getDefaults().subtitleStyle;
         this.subtitleDelayMs = 0;
@@ -81,10 +138,15 @@ export function createPlayerScreenMethods53() {
           textColor: defaults.textColor,
           textOpacity: defaults.textOpacity,
           bold: defaults.bold,
+          stripSdh: defaults.stripSdh,
           outlineEnabled: defaults.outlineEnabled,
           outlineColor: defaults.outlineColor,
           verticalOffset: defaults.verticalOffset,
-          verticalOffsetContract: defaults.verticalOffsetContract
+          verticalOffsetContract: defaults.verticalOffsetContract,
+          hdrTextColor: defaults.hdrTextColor,
+          hdrBrightness: defaults.hdrBrightness,
+          backgroundColor: defaults.backgroundColor,
+          ...SubtitleAppearance.SUBTITLE_APPEARANCE_DEFAULTS
         };
       }
       if ((controlId === "delay" || controlId === "resetDelay" || controlId === "reset") && this.isAssAddonSubtitleActive()) {
@@ -243,11 +305,15 @@ export function createPlayerScreenMethods53() {
       this.renderSubtitleDialog();
       return true;
     },
-    applyBitmapEmbeddedSubtitleTrack(embeddedTrack, targetTrackIndex) {
+    applyBitmapEmbeddedSubtitleTrack(embeddedTrack, targetTrackIndex, options = {}) {
+      const isTizenBitmap = Environment.isTizen();
+      // shortcut: Tizen software bitmap rendering is limited to VobSub because
+      // AVPlay already draws PGS; widen it only if a firmware fails PGS too.
       if (
         !embeddedTrack?.bitmapSubtitle ||
+        (isTizenBitmap && embeddedTrack?.bitmapSubtitleFormat !== "vobsub") ||
         getEmbeddedSubtitleSupportState(embeddedTrack).supported === false ||
-        !canUseWebOsBitmapSubtitles()
+        !canUseEmbeddedBitmapSubtitles()
       ) {
         return false;
       }
@@ -255,7 +321,20 @@ export function createPlayerScreenMethods53() {
       if (!Number.isFinite(sourceTrackId) || sourceTrackId <= 0) {
         return false;
       }
+      const avplayTrackIndex = Number(options.avplayTrackIndex);
       const previousSubtitleSelectionKey = this.getActiveSubtitleSelectionKey();
+      if (isTizenBitmap) {
+        if (
+          !Number.isFinite(avplayTrackIndex) ||
+          avplayTrackIndex < 0 ||
+          typeof PlayerController.setAvPlaySubtitleTrack !== "function" ||
+          !PlayerController.setAvPlaySubtitleTrack(avplayTrackIndex, { renderMode: "html", keepSilent: true })
+        ) {
+          return false;
+        }
+        // Keep AVPlay silent even when the selection is deferred until PLAYING.
+        PlayerController.applyAvPlaySubtitleRenderMode?.("html");
+      }
       this.clearEmbeddedSubtitleCueRefreshTimers();
       if (this.externalTrackNodes.length) {
         this.clearMountedExternalSubtitleTracks();
@@ -263,10 +342,15 @@ export function createPlayerScreenMethods53() {
       this.clearWebOsEmbeddedTextSubtitleOverlay({ dispose: true });
       this.clearHtmlSubtitleOverlay();
       this.clearBitmapSubtitleOverlay({ dispose: true });
-      PlayerController.setWebOsEmbeddedSubtitleTrack?.(-1);
+      if (isTizenBitmap) {
+        this.selectedSubtitleTrackIndex = avplayTrackIndex;
+        this.selectedEmbeddedSubtitleTrackIndex = -1;
+      } else {
+        PlayerController.setWebOsEmbeddedSubtitleTrack?.(-1);
+        this.selectedEmbeddedSubtitleTrackIndex = Number.isFinite(targetTrackIndex) ? targetTrackIndex : -1;
+        this.selectedSubtitleTrackIndex = -1;
+      }
       this.bitmapSubtitleTrack = embeddedTrack;
-      this.selectedEmbeddedSubtitleTrackIndex = Number.isFinite(targetTrackIndex) ? targetTrackIndex : -1;
-      this.selectedSubtitleTrackIndex = -1;
       this.selectedAddonSubtitleId = null;
       this.selectedManifestSubtitleTrackId = null;
       this.resetSubtitleDelayAfterSelectionChange(previousSubtitleSelectionKey);

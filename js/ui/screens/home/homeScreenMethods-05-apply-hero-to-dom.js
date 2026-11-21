@@ -1,3 +1,6 @@
+import { ensureHeroMdbListRatings } from "./homeHeroMdbListLoad.js";
+import { registerHomeDomNodes } from "./homeDomUpdate.js";
+import { createHeroDescriptionAutoScroller } from "./heroDescriptionAutoScroll.js";
 import * as internals from "./homeScreenContext.js";
 
 export function createHomeScreenMethods05() {
@@ -55,11 +58,11 @@ export function createHomeScreenMethods05() {
               transitionMode: heroTransitionMode
             });
           } else {
-            backdrop.setAttribute("alt", display.title || "featured");
+            backdrop.setAttribute("alt", "");
           }
         } else if (src) {
           backdrop.setAttribute("src", src);
-          backdrop.setAttribute("alt", display.title || "featured");
+          backdrop.setAttribute("alt", "");
           backdrop.classList.remove("placeholder");
         } else {
           backdrop.removeAttribute("src");
@@ -80,6 +83,9 @@ export function createHomeScreenMethods05() {
             `<img class="home-hero-logo home-hero-logo-transition-enter" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title || "logo")}" decoding="async" fetchpriority="high" />`
           );
           const insertedLogo = brandNode.querySelector(".home-hero-logo");
+          // The logo belongs to the rendered hero, unlike temporary transition
+          // ghosts. Let incremental refreshes reuse or remove it.
+          registerHomeDomNodes([insertedLogo]);
           requestAnimationFrame(() => {
             insertedLogo?.classList?.add("is-visible");
             setTimeout(() => insertedLogo?.classList?.remove("home-hero-logo-transition-enter", "is-visible"), heroCrossfadeMs);
@@ -107,7 +113,11 @@ export function createHomeScreenMethods05() {
           secondaryNode.innerHTML = renderModernHeroSecondary(display);
           secondaryNode.classList.toggle(
             "is-empty",
-            !display.secondaryHighlightText && !display.badges.length && !display.showImdbSecondary && !display.languageText
+            !display.secondaryHighlightText &&
+              !display.badges.length &&
+              !display.showImdbSecondary &&
+              !display.languageText &&
+              !display.mdbListMarkup
           );
         }
       } else {
@@ -135,6 +145,11 @@ export function createHomeScreenMethods05() {
         descriptionNode.textContent = display.description || " ";
         descriptionNode.classList.toggle("is-empty", !display.description);
       }
+      const mdbRow = heroNode.querySelector(".home-hero-mdb-ratings");
+      if (mdbRow) {
+        mdbRow.innerHTML = display.mdbListMarkup || "";
+        mdbRow.classList.toggle("is-empty", !display.mdbListMarkup);
+      }
       this.scheduleHomeTruncationUpdate({ scope: heroNode });
       this.syncCollectionHeroMedia(hero);
 
@@ -142,6 +157,33 @@ export function createHomeScreenMethods05() {
       if (indicators) {
         indicators.innerHTML = buildHeroIndicators(this.heroCandidates, hero);
       }
+      // These nodes were replaced outside the incremental renderer. Register
+      // their new children so the next refresh replaces them instead of appending.
+      registerHomeDomNodes(
+        Array.from(
+          heroNode.querySelectorAll(
+            ".home-hero-title-text, .home-modern-hero-meta-line, .home-modern-hero-secondary, .home-hero-meta-primary, .home-hero-meta-secondary, .home-hero-chip-row, .home-hero-description, .home-hero-mdb-ratings, .home-hero-indicators"
+          )
+        )
+      );
+      void ensureHeroMdbListRatings.call(this);
+      this.applyHeroDescriptionAutoScroll();
+    },
+    applyHeroDescriptionAutoScroll() {
+      const node = this.container?.querySelector(".home-hero-card .home-hero-description");
+      if (!node) {
+        this.heroDescriptionAutoScroller?.stop();
+        return;
+      }
+      if (!this.heroDescriptionAutoScroller) {
+        this.heroDescriptionAutoScroller = createHeroDescriptionAutoScroller({
+          isPaused: () => this.isTrailerPlaying?.() === true || this.pauseOverlayVisible === true,
+          onHoldChange: (holding) => {
+            this.heroDescriptionScrollHolding = Boolean(holding);
+          }
+        });
+      }
+      this.heroDescriptionAutoScroller.apply(node, Boolean(this.layoutPrefs?.heroDescriptionAutoScrollEnabled));
     },
     setSidebarExpanded(expanded) {
       const nextExpanded = Boolean(expanded);

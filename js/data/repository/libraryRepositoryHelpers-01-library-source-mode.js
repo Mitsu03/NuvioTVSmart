@@ -23,6 +23,7 @@ import { SimklAuthService } from "./simklAuthService.js";
 import { SimklSyncService } from "./simklSyncService.js";
 
 export const LibrarySourceMode = {
+  MDBLIST: "mdblist",
   LOCAL: "local",
   TRAKT: "trakt",
   SIMKL: "simkl"
@@ -44,6 +45,7 @@ export const LibraryListPrivacy = {
 };
 
 export const LibraryListType = {
+  EXTERNAL: "external",
   WATCHLIST: "watchlist",
   PERSONAL: "personal"
 };

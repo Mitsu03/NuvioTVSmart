@@ -76,8 +76,6 @@ import { StreamBadgeSettingsStore } from "../../../data/local/streamBadgeSetting
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
 
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
-
 import { matchStreamBadges } from "../../../core/streams/streamBadgeRules.js";
 
 import { hasReleaseToken } from "../../../core/streams/releaseToken.js";
@@ -138,7 +136,7 @@ import {
 
 import { buildSubtitleRequestHeaders } from "../../../core/player/subtitleRequestHeaders.js";
 
-import { normalizeSubtitleLanguageAlias } from "../../../core/player/subtitleLanguageAliases.js";
+import { normalizeSubtitleLanguageAlias, normalizeHbsLanguageAlias } from "../../../core/player/subtitleLanguageAliases.js";
 
 import { mdbListRatingIcon } from "../../../core/util/mdbListRatingStatus.js";
 
@@ -237,6 +235,8 @@ export function normalizeTrackLanguageCode(value) {
   if (!raw || raw === "unknown") {
     return "";
   }
+  const hbsLanguage = normalizeHbsLanguageAlias(raw, LANGUAGE_CODE_ALIASES);
+  if (hbsLanguage) return hbsLanguage;
   if (!/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$/i.test(raw)) {
     return "";
   }

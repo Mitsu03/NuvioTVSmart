@@ -4,6 +4,8 @@ import * as internals from "./metaDetailsScreenContext.js";
 export function createMetaDetailsScreenMethods03() {
   const {
     metaRepository,
+    mdbListRepository,
+    metaWithRouteExternalIds,
     watchProgressRepository,
     savedLibraryRepository,
     watchedItemsRepository,
@@ -32,6 +34,7 @@ export function createMetaDetailsScreenMethods03() {
   return {
     async loadDetail() {
       const token = this.detailLoadToken;
+      this.detailEnrichmentComplete = false;
       let { itemId, itemType = "movie", fallbackTitle = "Untitled" } = this.params || {};
       if (!itemId) {
         this.renderError("Item id mancante.");
@@ -100,6 +103,20 @@ export function createMetaDetailsScreenMethods03() {
         status: "error",
         message: "timeout"
       });
+      const ratingsPromise = metaPromise
+        .then((result) => {
+          if (token !== this.detailLoadToken || result.status !== "success") return null;
+          return mdbListRepository.getRatingsForMeta(metaWithRouteExternalIds(result.data, this.params), itemId, itemType);
+        })
+        .catch(() => null);
+      const seriesRatingsPromise = metaPromise
+        .then((result) => {
+          if (token !== this.detailLoadToken || result.status !== "success") return null;
+          const episodes = normalizeEpisodes(result.data?.videos || [], result.data?.type || itemType);
+          if (!episodes.length || !isSeriesDetailMeta(result.data, episodes)) return null;
+          return withTimeout(this.fetchSeriesRatingsBySeason(result.data, episodes), 5000, {});
+        })
+        .catch(() => null);
       const isSavedPromise = savedLibraryRepository.isSaved(itemId);
       const progressPromise = watchProgressRepository.getResumeByContentId(itemId);
       const watchedItemPromise = watchedItemsRepository.isWatched(itemId);
@@ -181,6 +198,11 @@ export function createMetaDetailsScreenMethods03() {
       void this.refreshTrailerSource(meta, token);
       void this.loadTraktComments({ force: true });
 
+      this.loadDetailEnrichments(meta, token, ratingsPromise, seriesRatingsPromise);
+    },
+    loadDetailEnrichments(meta, token, ratingsPromise = null, seriesRatingsPromise = Promise.resolve(null)) {
+      if (token !== this.detailLoadToken) return;
+      this.detailEnrichmentComplete = false;
       // Match Android TV: recommendations are an independent detail-page job.
       // Starting them from the base meta keeps slower artwork/credits enrichment
       // (and its optional cast fallback) from delaying or starving this section.
@@ -198,34 +220,47 @@ export function createMetaDetailsScreenMethods03() {
 
       // Background enrichments: do not block initial screen rendering.
       (async () => {
-        const enrichedMeta = await withTimeout(this.enrichMeta(meta), 4000, meta);
+        const enrichedMeta = await this.enrichMeta(meta);
         if (token !== this.detailLoadToken) {
           return;
         }
 
+        // Metadata can arrive after a watched-state edit on the visible page.
+        const [currentProgressItems, currentWatchedItems] = await Promise.all([
+          getDetailAllProgressPromise(),
+          watchedItemsRepository.getAll()
+        ]);
+        if (token !== this.detailLoadToken) {
+          return;
+        }
+        const currentProgressItemsForDetail = this.resumeProgress ? [this.resumeProgress, ...currentProgressItems] : currentProgressItems;
         this.meta = enrichedMeta || meta;
         this.episodes = normalizeEpisodes(this.meta?.videos || [], this.meta?.type || this.params?.itemType);
         this.castItems = extractCast(this.meta);
-        this.buildEpisodeState(progressItemsForDetail, allWatchedItems);
+        this.buildEpisodeState(currentProgressItemsForDetail, currentWatchedItems, this.enrichedWatchedState);
         this.trailerSource = resolveTrailerSource(this.meta);
         if (!this.castItems.length) {
           const fallbackCast = await withTimeout(this.fetchTmdbCastFallback(this.meta), 3200, []);
+          if (token !== this.detailLoadToken) {
+            return;
+          }
           if (Array.isArray(fallbackCast) && fallbackCast.length) {
             this.castItems = fallbackCast;
           }
         }
-        this.selectedSeason = this.resolveInitialSelectedSeason(this.resumeProgress || progress, progressItemsForDetail);
+        if (!this.isBackNavigation)
+          this.selectedSeason = this.resolveInitialSelectedSeason(this.resumeProgress, currentProgressItemsForDetail);
         this.selectedRatingSeason = this.selectedRatingSeason || this.selectedSeason || 1;
-        this.nextEpisodeToWatch = this.computeNextEpisodeToWatch(this.resumeProgress || progress);
+        this.nextEpisodeToWatch = this.computeNextEpisodeToWatch(this.resumeProgress);
         this.updateRenderedDetailSections(this.meta);
-        void this.loadMdbListRatings(this.meta, token);
+        void this.loadMdbListRatings(this.meta, token, ratingsPromise);
         void this.refreshTrailerSource(this.meta, token);
         void this.loadTraktComments({ force: true });
 
         const tasks = [];
         const simklProgressSourceSelected = isSimklProgressSourceSelected();
         if (isSeriesDetailMeta(this.meta, this.episodes)) {
-          tasks.push(withTimeout(this.fetchSeriesRatingsBySeason(this.meta), 5000, {}));
+          tasks.push(seriesRatingsPromise.then((ratings) => ratings || withTimeout(this.fetchSeriesRatingsBySeason(this.meta), 5000, {})));
           const traktId = this.meta?.ids?.trakt;
           if (traktId && !simklProgressSourceSelected) {
             tasks.push(
@@ -250,8 +285,15 @@ export function createMetaDetailsScreenMethods03() {
         if (isSeriesDetailMeta(this.meta, this.episodes)) {
           this.seriesRatingsBySeason = mergeSeasonRatings(addonRatingsBySeason(this.episodes), results[0] || {});
           if (this.meta?.ids?.trakt && results[1] instanceof Map) {
+            const [latestProgressItems, latestWatchedItems] = await Promise.all([
+              getDetailAllProgressPromise(),
+              watchedItemsRepository.getAll()
+            ]);
+            if (token !== this.detailLoadToken) {
+              return;
+            }
             this.enrichedWatchedState = results[1];
-            this.buildEpisodeState(allProgressItems, allWatchedItems, this.enrichedWatchedState);
+            this.buildEpisodeState(latestProgressItems, latestWatchedItems, this.enrichedWatchedState);
             this.updateRenderedDetailSections(this.meta);
           }
         } else {
@@ -263,6 +305,7 @@ export function createMetaDetailsScreenMethods03() {
             this.updateRenderedDetailSections(this.meta);
           }
         }
+        this.detailEnrichmentComplete = true;
         this.updateRenderedDetailSections(this.meta);
       })().catch((error) => {
         console.warn("Detail background enrichment failed", error);

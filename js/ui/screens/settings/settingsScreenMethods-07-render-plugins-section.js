@@ -1,3 +1,4 @@
+import { renderMediaServersSection } from "./settingsMediaServersSection.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./settingsScreenContext.js";
 
@@ -40,6 +41,11 @@ export function createSettingsScreenMethods07() {
         `;
     },
     renderContentDiscoverySection() {
+      if (this.mediaServersView) return renderMediaServersSection.call(this);
+      this.actionMap.set("contentDiscovery:servers", () => {
+        this.mediaServersView = "list";
+        this.contentFocusKey = "mediaServers:back";
+      });
       this.actionMap.set("contentDiscovery:addons", async () => {
         await Router.navigate("plugin");
       });
@@ -53,6 +59,7 @@ export function createSettingsScreenMethods07() {
           ${this.renderSectionHeader(SECTION_META.find((item) => item.id === "contentDiscovery"))}
           <div class="settings-group-card">
             <div class="settings-stack">
+              ${this.renderActionRow({ focusKey: "contentDiscovery:servers", title: t("settings_media_servers"), subtitle: t("settings_media_servers_subtitle"), leadingIcon: "dns" })}
               ${this.renderActionRow({
                 focusKey: "contentDiscovery:addons",
                 title: t("addon_title", {}, "Addons"),

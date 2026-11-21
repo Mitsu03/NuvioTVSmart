@@ -2,11 +2,14 @@
 import * as internals from "./discoverScreen.js";
 
 export function createDiscoverScreenMethods02() {
-  const { Router, ScreenUtils, catalogRepository, focusWithoutAutoScroll, formatAddonTypeLabel } = internals;
+  const { Router, ScreenUtils, catalogRepository, focusWithoutAutoScroll, formatAddonTypeLabel, formatGenreLabel, t } = internals;
 
   return {
     async reloadItems({ suppressLoadingRender = false, preserveExistingItems = false, partialRender = false } = {}) {
       const selectedCatalog = this.getSelectedCatalog();
+      // Like Android cancelling discoverJob on reset: a filter change must
+      // discard responses still in flight for the previous selection.
+      this.discoverRequestToken = (this.discoverRequestToken || 0) + 1;
       this.captureViewState();
       this.nextSkip = 0;
       this.hasMore = true;
@@ -54,6 +57,7 @@ export function createDiscoverScreenMethods02() {
       }
 
       const token = this.loadToken;
+      const requestToken = this.discoverRequestToken;
       const selectedCatalog = this.getSelectedCatalog();
       if (!selectedCatalog) {
         this.hasMore = false;
@@ -92,7 +96,7 @@ export function createDiscoverScreenMethods02() {
         supportsSkip: selectedCatalog.supportsSkip !== false
       });
 
-      if (token !== this.loadToken) return;
+      if (token !== this.loadToken || requestToken !== this.discoverRequestToken) return;
       if (result.status !== "success") {
         this.loading = false;
         this.hasMore = false;
@@ -173,13 +177,13 @@ export function createDiscoverScreenMethods02() {
       if (kind === "catalog") {
         return this.catalogOptions.map((entry) => ({
           value: entry.key,
-          label: entry.catalogName || "Select"
+          label: entry.catalogName || t("discover_select_catalog", {}, "Select")
         }));
       }
       if (kind === "genre") {
         return this.genreOptions.map((value) => ({
           value,
-          label: value
+          label: formatGenreLabel(value)
         }));
       }
       return [];
@@ -227,8 +231,8 @@ export function createDiscoverScreenMethods02() {
     syncRenderedFilterValues() {
       const valueByKind = {
         type: formatAddonTypeLabel(this.selectedType),
-        catalog: this.getSelectedCatalog()?.catalogName || "Select",
-        genre: this.selectedGenre || "Default"
+        catalog: this.getSelectedCatalog()?.catalogName || t("discover_select_catalog", {}, "Select"),
+        genre: formatGenreLabel(this.selectedGenre || "Default")
       };
       Object.entries(valueByKind).forEach(([kind, value]) => {
         const node = this.container?.querySelector(`.library-picker-anchor[data-picker="${kind}"] .library-picker-value`);
@@ -277,7 +281,9 @@ export function createDiscoverScreenMethods02() {
       }
       const gridNode = this.container.querySelector("#discoverGridMount");
       if (gridNode instanceof HTMLElement) {
+        const loadedPosters = this.captureLoadedDiscoverPosters();
         gridNode.innerHTML = this.renderDiscoverCards(selectedCatalog);
+        this.restoreLoadedDiscoverPosters(loadedPosters);
       }
       const loadingNode = this.container.querySelector("#discoverLoadingMount");
       if (loadingNode instanceof HTMLElement) {

@@ -1,3 +1,4 @@
+import { canResolveMediaServerStream } from "../../../data/mediaserver/mediaServerRepository.js";
 import { PlayerController } from "../../../core/player/playerController.js";
 
 import {
@@ -75,8 +76,6 @@ import { DeviceLocalPlayerPreferences } from "../../../data/local/deviceLocalPla
 import { StreamBadgeSettingsStore } from "../../../data/local/streamBadgeSettingsStore.js";
 
 import { TorrentSettingsStore } from "../../../data/local/torrentSettingsStore.js";
-
-import { WebOsAudioCompatibilityStore } from "../../../data/local/webOsAudioCompatibilityStore.js";
 
 import { matchStreamBadges } from "../../../core/streams/streamBadgeRules.js";
 
@@ -287,6 +286,7 @@ export function flattenStreamGroups(streamResult) {
         raw: stream
       };
       if (
+        canResolveMediaServerStream(entry) ||
         DirectDebridResolver.shouldListStream(entry) ||
         WebOsEngineFsResolver.canResolveStream(entry) ||
         TizenStreamingServerResolver.canResolveStream(entry)

@@ -1,3 +1,4 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./searchScreen.js";
 
@@ -29,7 +30,7 @@ export function createSearchScreenMethods02() {
 
   return {
     async loadDiscoverRows() {
-      const addons = await addonRepository.getInstalledAddons();
+      const addons = await addonRepository.getInstalledAddons({ includeMediaServers: true });
       const sections = [];
       const itemLimit = getSearchDiscoverResultsPerRow();
       addons.forEach((addon) => {
@@ -134,7 +135,7 @@ export function createSearchScreenMethods02() {
       controllers?.forEach((controller) => controller.abort());
     },
     async searchRows(query, { token = this.loadToken, onFirstResults = null } = {}) {
-      const addons = await addonRepository.getInstalledAddons();
+      const addons = await addonRepository.getInstalledAddons({ includeMediaServers: true });
       if (token !== this.loadToken) return [];
       const searchableCatalogs = buildSearchTargets(addons);
       const scheduleIndices = buildSearchScheduleIndices(searchableCatalogs);
@@ -273,6 +274,7 @@ export function createSearchScreenMethods02() {
             ${row.subtitle ? `<div class="search-results-subtitle" dir="${contentTextDirection(row.subtitle)}">${row.subtitle}</div>` : ""}
             <div class="search-results-track">
               ${(row.items || [])
+                .map((item) => customPosterForItem(item, "search"))
                 .map(
                   (item) => `
                 <article class="search-result-card focusable"
@@ -288,7 +290,7 @@ export function createSearchScreenMethods02() {
                          data-catalog-type="${escapeHtml(row.type || item.catalogType || "")}"
                          data-row-key="${escapeHtml(rowKey)}">
                   <div class="search-result-poster-wrap">
-                    ${item.poster ? `<img class="search-result-poster" src="${item.poster}" alt="${item.name || "content"}" loading="lazy" decoding="async" />` : `<div class="search-result-poster placeholder"></div>`}
+                    ${item.poster ? `<img class="search-result-poster" ${posterFallbackAttributes(item)} src="${item.poster}" alt="" loading="lazy" decoding="async" />` : `<div class="search-result-poster placeholder"></div>`}
                     ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}
                   </div>
                   <div class="search-result-name" dir="${contentTextDirection(item.name || "Untitled")}">${item.name || "Untitled"}</div>

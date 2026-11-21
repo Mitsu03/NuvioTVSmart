@@ -274,7 +274,8 @@ export async function fetchModernHeroTmdbEnrichment(hero = {}, itemType = "movie
       TmdbMetadataService.fetchEnrichment({
         tmdbId,
         contentType: itemType,
-        language: settings.language
+        language: settings.language,
+        includeCredits: false
       }),
       2200,
       null
@@ -347,20 +348,15 @@ export function isCompletedForContinueWatching(item = {}) {
 }
 
 export function isInProgressForContinueWatching(item = {}) {
-  const fraction = progressFractionForContinueWatching(item);
-  return fraction >= CW_PROGRESS_START_THRESHOLD && fraction < watchProgressCompletedThreshold(item);
-}
-
-export function shouldTreatAsInProgressForContinueWatching(item = {}) {
-  if (isInProgressForContinueWatching(item)) {
-    return true;
-  }
   if (isCompletedForContinueWatching(item)) {
     return false;
   }
-  const hasStartedPlayback = Number(item.positionMs || 0) > 0 || Number(item.progressPercent || 0) > 0;
-  const source = String(item.source || "").toLowerCase();
-  return hasStartedPlayback && source !== "trakt_history" && source !== "trakt_show_progress";
+  // Android/mobile rule: any saved progress counts, with no 2% start threshold.
+  return Number(item.positionMs || 0) > 0 || Number(item.progressPercent || 0) > 0;
+}
+
+export function shouldTreatAsInProgressForContinueWatching(item = {}) {
+  return isInProgressForContinueWatching(item);
 }
 
 export function episodeKey(season, episode) {
@@ -379,6 +375,7 @@ export function normalizeEpisodeEntry(video = {}) {
     title: String(video?.title || video?.name || "").trim(),
     thumbnail: firstNonEmpty(video?.thumbnail, video?.thumbnailUrl, video?.still, video?.stillUrl, video?.image, video?.poster),
     overview: firstNonEmpty(video?.overview, video?.description),
+    imdbRating: video?.imdbRating ?? video?.imdb_rating ?? video?.rating ?? null,
     released: firstNonEmpty(video?.released, video?.releaseInfo),
     runtimeMinutes: parseRuntimeMinutes(video?.runtimeMinutes ?? video?.runtime ?? 0),
     available: typeof video?.available === "boolean" ? video.available : null

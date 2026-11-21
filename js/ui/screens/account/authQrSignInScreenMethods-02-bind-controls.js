@@ -2,8 +2,18 @@
 import * as internals from "./authQrSignInScreen.js";
 
 export function createAuthQrSignInScreenMethods02() {
-  const { Router, QrLoginService, LocalStore, I18n, QrCodeGenerator, GUEST_QR_BYPASS_KEY, escapeHtml, formatDuration, parseQrExpiration } =
-    internals;
+  const {
+    Platform,
+    Router,
+    QrLoginService,
+    LocalStore,
+    I18n,
+    QrCodeGenerator,
+    GUEST_QR_BYPASS_KEY,
+    escapeHtml,
+    formatDuration,
+    parseQrExpiration
+  } = internals;
 
   return {
     bindControls() {
@@ -26,6 +36,8 @@ export function createAuthQrSignInScreenMethods02() {
         .querySelector("[data-action='use-official']")
         ?.addEventListener("click", () => this.openServerConnection("officialReview"));
       this.container.querySelector("[data-action='connect-custom']")?.addEventListener("click", () => this.openServerConnection("input"));
+      this.container.querySelector("[data-action='login-qr']")?.addEventListener("click", () => this.toggleLoginMode(false));
+      this.container.querySelector("[data-action='login-email']")?.addEventListener("click", () => this.toggleLoginMode(true));
       this.container.querySelector("[data-action='email-submit']")?.addEventListener("click", () => void this.submitEmailLogin());
       this.container.querySelector("[data-action='cancel-signout']")?.addEventListener("click", () => this.dismissSignOutConfirmation());
       this.container.querySelector("[data-action='confirm-signout']")?.addEventListener("click", () => void this.handleSignOut());
@@ -60,6 +72,48 @@ export function createAuthQrSignInScreenMethods02() {
       }
       this.isServerMenuOpen = !this.isServerMenuOpen;
       this.render();
+    },
+    suppressNativeActivation(event) {
+      if (!Platform.isWebOS()) return false;
+      event?.preventDefault?.();
+      return this.isActivationDuplicated("keydown");
+    },
+    isActivationDuplicated(kind) {
+      if (!Platform.isWebOS()) return false;
+      const now = Date.now();
+      const previous = this.lastActivation;
+      // Consume only the opposite event in a key/click pair. Do not debounce
+      // consecutive OK presses or pointer clicks, or extend a consumed pair.
+      if (previous && previous.kind !== kind && now - previous.at >= 0 && now - previous.at <= 400) {
+        this.lastActivation = null;
+        return true;
+      }
+      this.lastActivation = { kind, at: now };
+      return false;
+    },
+    toggleLoginMode(useEmail) {
+      // Auth requests already in flight cannot safely be cancelled.
+      if (!this.isMounted || this.isLeaving || this.isSignedIn || this.isStartingQr || this.isPolling || this.isEmailSubmitting) return;
+      if (!this.supportsEmailAuth || !this.supportsQrAuth) return;
+      if (this.useEmailLogin === useEmail) {
+        this.isServerMenuOpen = false;
+        this.render();
+        return;
+      }
+      this.useEmailLogin = useEmail;
+      this.useQrLogin = !useEmail;
+      this.isServerMenuOpen = false;
+      this.stopIntervals();
+      this.clearQr();
+      this.qrStatusText = "";
+      this.render();
+      if (this.useQrLogin) {
+        void this.startQr().catch((error) => {
+          if (this.isMounted && !this.isLeaving) {
+            this.setStatus(this.toFriendlyQrError(error?.message || error));
+          }
+        });
+      }
     },
     openSignOutConfirmation() {
       if (this.isLeaving || !this.isSignedIn) return;
@@ -108,7 +162,9 @@ export function createAuthQrSignInScreenMethods02() {
         }
       }
     },
-    renderQr({ loginUrl, verificationUri, displayCode, code, expiresAt }) {
+    renderQr(result) {
+      this.qrResult = result;
+      const { loginUrl, verificationUri, displayCode, code, expiresAt } = result;
       const qrContainer = this.container?.querySelector("#qr-container");
       const codeText = this.container?.querySelector("#qr-code-text");
       const manualText = this.container?.querySelector("#qr-manual-text");
@@ -139,6 +195,7 @@ export function createAuthQrSignInScreenMethods02() {
       this.startCountdown(expiresAt);
     },
     clearQr() {
+      this.qrResult = null;
       const qrContainer = this.container?.querySelector("#qr-container");
       const manualText = this.container?.querySelector("#qr-manual-text");
       const codeText = this.container?.querySelector("#qr-code-text");
@@ -161,7 +218,7 @@ export function createAuthQrSignInScreenMethods02() {
         const remaining = expiration - Date.now();
         const expiryNode = this.container?.querySelector("#qr-expiry");
         if (expiryNode) {
-          expiryNode.innerText = I18n.t("auth.qr.expires", {
+          expiryNode.innerText = I18n.t("auth_qr_expires", {
             duration: formatDuration(remaining)
           });
         }

@@ -5,7 +5,23 @@ export function createPlayerScreenMethods73() {
   const { PlayerController, streamRepository, TrackingScrobbleService, ENGINEFS_NAVIGATION_CLEANUP_GRACE_MS } = internals;
 
   return {
+    stopTrackingBeforeTeardown() {
+      // Android stopAndRelease(): report the position before playback is torn
+      // down, otherwise the stopped engine timeline reads back as zero.
+      if (this.hasPresentedPlaybackFrame && !this.postPlayNaturalCompletionPrepared && TrackingScrobbleService.isEnabled()) {
+        TrackingScrobbleService.stop(this.buildScrobbleContext());
+      }
+    },
     cleanup() {
+      this.closeStreamInfo({ restore: false });
+      this.stopTrackingBeforeTeardown();
+      try {
+        this.leavePartyPlayback();
+      } catch (error) {
+        console.warn("[party] leaving playback failed", error);
+      }
+      this.unbindParty();
+      this.partyPanelVisible = false;
       try {
         this.cancelSourceLoad();
         streamRepository.setLocalPluginSearchPaused(true);
@@ -34,6 +50,12 @@ export function createPlayerScreenMethods73() {
         this.postPlayPendingSelectAction = "";
         this.clearPostPlayFocusTimer();
         this.clearPostPlayLongPressTimer();
+        this.clearEpisodePanelLongPressTimer?.();
+        this.episodePanelPendingSelect = false;
+        this.episodePanelLongPressTriggered = false;
+        this.closeEpisodeOptionsDialog?.();
+        this.chaptersPanelVisible = false;
+        this.closeChaptersPanel?.({ restoreFocus: false });
         this.clearPostPlaySynopsisScrollAnimation();
         this.postPlayLongPressTriggered = false;
         this.cancelPostPlayPlayerSurfaceAnimation();
@@ -63,6 +85,7 @@ export function createPlayerScreenMethods73() {
         this.subtitleDelayOverlayVisible = false;
         this.subtitleTimingDialogVisible = false;
         this.resetSubtitleAutoSyncState();
+        this.resetAutomaticSubtitleSyncState({ resetStartupKey: true });
         this.pauseOverlayMetaRequestToken = Number(this.pauseOverlayMetaRequestToken || 0) + 1;
         this.nextEpisodeTransitionMeta = null;
         this.streamCandidatesByVideoId?.clear?.();
@@ -106,6 +129,7 @@ export function createPlayerScreenMethods73() {
         this.clearPlaybackStallGuard();
         this.bufferingActive = false;
         this.clearBufferingSpinnerTimer();
+        this.stopSeekLoadingWatchdog();
         // The loading-completion poll self-reschedules; without this it
         // survives the route change and janks the next menu on Tizen.
         if (this.loadingCompletionTimer) {
@@ -139,11 +163,16 @@ export function createPlayerScreenMethods73() {
           clearInterval(this.tickTimer);
           this.tickTimer = null;
         }
+        this.cancelPendingUiTick?.();
+        this.lastUiTickAt = 0;
 
         this.stopSkipIntervalCheckTimer();
 
         if (this.aspectToastTimer) {
           clearTimeout(this.aspectToastTimer);
+          clearTimeout(this.sourceStartupTimeoutTimer);
+          this.sourceStartupTimeoutTimer = null;
+          this.sourceFallbackInFlight = false;
           this.aspectToastTimer = null;
         }
 

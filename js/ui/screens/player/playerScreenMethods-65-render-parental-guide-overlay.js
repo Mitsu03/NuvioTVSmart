@@ -1,6 +1,21 @@
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
+// Compose tween() uses FastOutSlowInEasing: cubic-bezier(0.4, 0, 0.2, 1).
+function parentalGuideEasing(progress) {
+  if (progress <= 0 || progress >= 1) return progress;
+  let low = 0;
+  let high = 1;
+  for (let i = 0; i < 20; i += 1) {
+    const t = (low + high) / 2;
+    const x = 3 * (1 - t) * (1 - t) * t * 0.4 + 3 * (1 - t) * t * t * 0.2 + t * t * t;
+    if (x < progress) low = t;
+    else high = t;
+  }
+  const t = (low + high) / 2;
+  return 3 * (1 - t) * t * t + t * t * t;
+}
+
 export function createPlayerScreenMethods65() {
   const {
     PARENTAL_GUIDE_ROW_HEIGHT,
@@ -131,7 +146,7 @@ export function createPlayerScreenMethods65() {
       const tick = (timestamp) => {
         const elapsed = Math.max(0, Number(timestamp || Date.now()) - startedAt);
         const progress = clamp(elapsed / Math.max(1, Number(durationMs || 1)), 0, 1);
-        this.parentalGuideLineProgress = from + (target - from) * progress;
+        this.parentalGuideLineProgress = from + (target - from) * parentalGuideEasing(progress);
         line.style.height = `${Math.max(0, this.parentalGuideLineProgress).toFixed(2)}px`;
         if (progress < 1) {
           this.parentalGuideLineAnimationFrame = requestAnimationFrame(tick);
@@ -226,6 +241,7 @@ export function createPlayerScreenMethods65() {
         this.hideEpisodePanel();
         return;
       }
+      this.closeChaptersPanel?.({ restoreFocus: false });
       this.episodePanelVisible = true;
       this.episodePanelMode = "episodes";
       this.episodePanelStreamsError = "";

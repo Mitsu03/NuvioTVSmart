@@ -179,11 +179,14 @@ export function createPlayerScreenMethods59() {
           id: `audio-track-${index}`,
           label: display.label,
           secondary: display.secondary,
+          languageText: display.languageText,
+          metadata: display.metadata,
           selected:
             Number.isFinite(embeddedTrackIndex) && this.selectedEmbeddedAudioTrackIndex >= 0
               ? embeddedTrackIndex === this.selectedEmbeddedAudioTrackIndex
               : index === this.selectedAudioTrackIndex,
           supported: support.supported,
+          canTryAudioConversion: Boolean(support.canTryAudioConversion),
           unsupportedReason: support.unsupportedReason,
           audioTrackIndex: index,
           track: {
@@ -211,8 +214,11 @@ export function createPlayerScreenMethods59() {
           id: `audio-embedded-${normalizedEmbeddedIndex}`,
           label: display.label,
           secondary: display.secondary,
+          languageText: display.languageText,
+          metadata: display.metadata,
           selected: normalizedEmbeddedIndex === this.selectedEmbeddedAudioTrackIndex,
           supported: support.supported,
+          canTryAudioConversion: Boolean(support.canTryAudioConversion),
           unsupportedReason: support.unsupportedReason,
           embeddedAudioTrackIndex: normalizedEmbeddedIndex,
           track: {

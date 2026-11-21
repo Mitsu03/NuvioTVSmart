@@ -1,3 +1,4 @@
+var audioTranscode = require("./audioTranscode");
 var fs = require("fs");
 var http = require("http");
 var path = require("path");
@@ -9,11 +10,43 @@ var SERVICE_ID = "space.nuvio.webos.service";
 var PORT_CANDIDATES = require("./constants").PORT_CANDIDATES;
 var REQUEST_TIMEOUT_MS = 5000;
 
+function patchWebOsPlaybackTransport(source) {
+  if (source.indexOf("/* NUVIO_WEBOS_PROXY_REDIRECTS */") >= 0) return source;
+  function replaceOnce(target, replacement) {
+    var index = source.indexOf(target);
+    if (index < 0 || source.indexOf(target, index + target.length) >= 0)
+      throw new Error("Unsupported webOS media runtime redirect layout");
+    source = source.replace(target, replacement);
+  }
+  // Each child URI belongs to the final manifest, including relative paths,
+  // keys and initialization segments. url.parse().host already carries its port.
+  replaceOnce(
+    "function parseUrl(line){if(line.startsWith",
+    "function parseUrl(line){line=url.resolve(url.format(dest),line);if(line.startsWith"
+  );
+  replaceOnce(
+    'lineUrl.protocol+"//"+lineUrl.host+(lineUrl.port?":"+lineUrl.port:"")',
+    'lineUrl.protocol+"//"+lineUrl.host'
+  );
+  // Preserve the destination object shared with playlist detection/rewriting.
+  // Reapply only the headers explicitly supplied for this stream on each hop.
+  replaceOnce(
+    'dest=url.parse(url.resolve(dest.href.slice(0,-(dest.path||"").length-(dest.hash||"").length),newLocation)),headers=new Headers(makeHeaders(headers,proxyReqHeaders,{host:dest.host})),opts[cfgOpts.DestinationHeader].forEach((function(headerString){headers.set.apply(headers,parseHeaderString(headerString))})),redirectCount+=1,!0',
+    '(function(){var nextDest=url.parse(url.resolve(url.format(dest),newLocation));Object.keys(dest).forEach(function(key){delete dest[key]});Object.keys(nextDest).forEach(function(key){dest[key]=nextDest[key]});opts[cfgOpts.Destination]=dest.protocol+"//"+dest.host;headers=new Headers(makeHeaders(headers,proxyReqHeaders,{host:dest.host}));opts[cfgOpts.DestinationHeader].forEach(function(headerString){headers.set.apply(headers,parseHeaderString(headerString))});if(result.body&&typeof result.body.destroy==="function")result.body.destroy();redirectCount+=1;return true})()'
+  );
+  return source + "\n/* NUVIO_WEBOS_PROXY_REDIRECTS */\n";
+}
+
 function patchWebOsMediaRuntimeCode(code, filename) {
   var source = String(code || "");
   if (!/media-http\.cjs$/i.test(String(filename || ""))) {
     return source;
   }
+
+  source = require("../../tizen/runtime/proxy-redirect-report-patch.cjs")(source);
+  source = require("../../tizen/runtime/enginefs-cache-routes-patch.cjs")(source);
+  source = require("../../tizen/runtime/enginefs-tracks-reader-patch.cjs")(source);
+  source = patchWebOsPlaybackTransport(source);
 
   // The vendored proxy always passes an https.Agent to node-fetch. node-fetch
   // rejects that agent for http:// destinations, so an otherwise reachable
@@ -25,20 +58,16 @@ function patchWebOsMediaRuntimeCode(code, filename) {
     source = source.replace(proxyAgentTarget, proxyAgentReplacement);
   }
 
-  // The app-side proxy URL builder encodes each header value once before
-  // placing it in the route. The vendored EngineFS HLS rewriter serializes
-  // those propagated headers again for every child URL, so normalize one
-  // existing URI-encoding layer before serializing them or Referer/Origin
-  // values accumulate an extra layer on cross-host requests. Keep this
-  // compatibility patch at the webOS bootstrap boundary because the runtime
-  // is a generated third-party bundle, not source maintained here.
+  // The router decodes the path and then the query options. Child URLs need
+  // the same two encoding layers as the original app-side URL. Header values
+  // here are already decoded; preserve literal percent escapes such as %2F.
   // The same runtime also concatenates url.parse(...).search while rewriting
   // absolute media URLs. Node's legacy parser returns null for a URL without
   // a query string, so that concatenation produces a literal `null` suffix
   // (for example, `segment.tsnull`) and sends malformed HLS segment URLs.
   if (
     source.indexOf("function encodeProxyHeaderString(") >= 0 &&
-    source.indexOf("decodeURIComponent(parsed[1])") >= 0 &&
+    source.indexOf("encodeURIComponent(parsed[1])") >= 0 &&
     source.indexOf('lineUrl.pathname+(lineUrl.search||"")') >= 0 &&
     source.indexOf('urlJoin([virtualRoot,lineUrl.pathname])+(lineUrl.search||"")') >= 0
   ) {
@@ -65,11 +94,11 @@ function patchWebOsMediaRuntimeCode(code, filename) {
   }
 
   var helperReplacement =
-    'function parseHeaderString(headerString){var headerArray=headerString.split(":");return[headerArray.shift(),headerArray.join(":")]}function encodeProxyHeaderString(headerString){var parsed=parseHeaderString(headerString);try{parsed[1]=decodeURIComponent(parsed[1])}catch(_){ }return parsed[0]+":"+encodeURIComponent(parsed[1])}function stringifyProxyOptions(options,cfgOpts){var serialized=Object.assign({},options);serialized[cfgOpts.DestinationHeader]=ensureArray(serialized[cfgOpts.DestinationHeader]).map(encodeProxyHeaderString);return querystring.stringify(serialized)}function urlJoin(segments){';
+    'function parseHeaderString(headerString){var headerArray=headerString.split(":");return[headerArray.shift(),headerArray.join(":")]}function encodeProxyHeaderString(headerString){var parsed=parseHeaderString(headerString);return parsed[0]+":"+encodeURIComponent(parsed[1])}function stringifyProxyOptions(options,cfgOpts){var serialized=Object.assign({},options);serialized[cfgOpts.DestinationHeader]=ensureArray(serialized[cfgOpts.DestinationHeader]).map(encodeProxyHeaderString);return querystring.stringify(serialized)}function urlJoin(segments){';
   source = source.replace(helperTarget, helperReplacement);
   source = source.replace(
     childTarget,
-    '"/proxy/"+stringifyProxyOptions(newOpts,cfgOpts)+lineUrl.pathname+(lineUrl.search||"")'
+    '"/proxy/"+querystring.stringify(newOpts)+lineUrl.pathname+(lineUrl.search||"")'
   );
   source = source.replace(
     sameHostTarget,
@@ -85,6 +114,13 @@ function patchWebOsMediaRuntimeCode(code, filename) {
 
 function loadCommonJsScript(filename) {
   var code = fs.readFileSync(filename, "utf8");
+  if (/media-http\.cjs$/i.test(String(filename || ""))) {
+    // webOS 4/5 run Node 8, before readable.readableHighWaterMark (9.3).
+    require("../../tizen/runtime/node-runtime-compat.cjs")({
+      Buffer: Buffer,
+      stream: require("stream")
+    });
+  }
   code = patchWebOsMediaRuntimeCode(code, filename);
   var mod = new Module(filename, module);
   mod.filename = filename;
@@ -120,6 +156,7 @@ function installImageProxyHttpHook() {
     }
 
     var wrapped = function (req, res) {
+      if (audioTranscode.handle(req, res)) return;
       if (supabaseProxyHandler(req, res)) {
         return;
       }

@@ -1,3 +1,5 @@
+import { escapeMediaServerText } from "./settingsMediaServersSection.js";
+import { createTrackingSettingsMethods } from "./trackingSettingsMethods.js";
 /* global __NUVIO_APP_VERSION__ */
 import { createSettingsScreenMethods01 } from "./settingsScreenMethods-01-get-current-rail-scroll-top.js";
 import { createSettingsScreenMethods02 } from "./settingsScreenMethods-02-render-action-row.js";
@@ -14,9 +16,12 @@ import { createSettingsScreenMethods12 } from "./settingsScreenMethods-12-render
 import { createSettingsScreenMethods13 } from "./settingsScreenMethods-13-apply-focus.js";
 import { createSettingsScreenMethods14 } from "./settingsScreenMethods-14-activate-focused.js";
 import { createSettingsScreenMethods15 } from "./settingsScreenMethods-15-cleanup.js";
+import { createSettingsScreenMethods16 } from "./settingsScreenMethods-16-p2p-cache.js";
+import { createSettingsScreenMethods17 } from "./settingsScreenMethods-17-network-tests.js";
 
 export * from "./settingsScreenContext.js";
 export const SettingsScreen = {
+  escapeMediaServerText,
   ...createSettingsScreenMethods01(),
   ...createSettingsScreenMethods02(),
   ...createSettingsScreenMethods03(),
@@ -31,5 +36,8 @@ export const SettingsScreen = {
   ...createSettingsScreenMethods12(),
   ...createSettingsScreenMethods13(),
   ...createSettingsScreenMethods14(),
-  ...createSettingsScreenMethods15()
+  ...createSettingsScreenMethods15(),
+  ...createSettingsScreenMethods16(),
+  ...createSettingsScreenMethods17(),
+  ...createTrackingSettingsMethods()
 };

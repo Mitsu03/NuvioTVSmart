@@ -2,8 +2,15 @@ import * as internals from "./homeScreenContext.js";
 import { registerHomeDomNodes } from "./homeDomUpdate.js";
 
 export function createHomeScreenMethods29() {
-  const { Router, catalogRepository, buildModernRowKey, MODERN_HOME_CONSTANTS, HOME_MAX_ITEMS_PER_ROW_DEFAULT, createPosterCardMarkup } =
-    internals;
+  const {
+    Router,
+    LayoutPreferences,
+    catalogRepository,
+    buildModernRowKey,
+    MODERN_HOME_CONSTANTS,
+    HOME_MAX_ITEMS_PER_ROW_DEFAULT,
+    createPosterCardMarkup
+  } = internals;
 
   return {
     setupModernTrackScrollPagination() {
@@ -71,6 +78,8 @@ export function createHomeScreenMethods29() {
             if (!itemsToAppend.length || !track.isConnected || this._trackScrollHandlers?.get(track) !== handler) {
               return false;
             }
+            // Read the poster preferences once per appended chunk, not per card.
+            const posterSettings = LayoutPreferences.get();
             const newMarkup = itemsToAppend
               .map((item, i) =>
                 createPosterCardMarkup(
@@ -84,7 +93,8 @@ export function createHomeScreenMethods29() {
                   false,
                   preferLandscape,
                   true,
-                  this.watchedTitleIds
+                  this.watchedTitleIds,
+                  posterSettings
                 )
               )
               .join("");
@@ -240,34 +250,44 @@ export function createHomeScreenMethods29() {
           if (prefetchTimer) {
             return;
           }
-          prefetchTimer = setTimeout(() => {
-            prefetchTimer = 0;
-            if (!track.isConnected || Router.getCurrent() !== "home") {
-              pendingPrefetchContext = null;
-              return;
-            }
-            const requestContext = pendingPrefetchContext;
-            pendingPrefetchContext = null;
-            if (requestContext?.focusedNode?.isConnected) {
-              const cards = track.querySelectorAll(".home-content-card:not(.home-poster-card-loading)");
-              const mountedCount = cards.length;
-              const trackWidth = Number(track.clientWidth || 0);
-              if (trackWidth !== measuredTrackWidth) {
-                const cardWidth = Number(requestContext.focusedNode.offsetWidth || 0);
-                const styles = globalThis.getComputedStyle?.(track);
-                const gap = Number.parseFloat(styles?.columnGap || styles?.gap || "0") || 0;
-                const stride = Math.max(1, cardWidth + gap);
-                visibleCardCount = Math.max(1, Math.ceil(trackWidth / stride));
-                measuredTrackWidth = trackWidth;
-              }
-              const projectedLastVisible = Number(requestContext.focusedIndex) + visibleCardCount - 1;
-              const loadAheadStart = Math.max(0, mountedCount - MODERN_HOME_CONSTANTS.trackPaginationLoadAheadItems);
-              if (projectedLastVisible < loadAheadStart) {
+          const waitsForDwell = Boolean(context?.focusedNode && this.isPerformanceConstrained?.());
+          prefetchTimer = setTimeout(
+            () => {
+              prefetchTimer = 0;
+              if (!track.isConnected || Router.getCurrent() !== "home") {
+                pendingPrefetchContext = null;
                 return;
               }
-            }
-            runPagination({ assumeNearEnd: true });
-          }, MODERN_HOME_CONSTANTS.trackPaginationPrefetchDelayMs);
+              if (waitsForDwell && this.getCurrentFocusedNode()?.closest?.(".home-track") !== track) {
+                pendingPrefetchContext = null;
+                return;
+              }
+              const requestContext = pendingPrefetchContext;
+              pendingPrefetchContext = null;
+              if (requestContext?.focusedNode?.isConnected) {
+                const cards = track.querySelectorAll(".home-content-card:not(.home-poster-card-loading)");
+                const mountedCount = cards.length;
+                const trackWidth = Number(track.clientWidth || 0);
+                if (trackWidth !== measuredTrackWidth) {
+                  const cardWidth = Number(requestContext.focusedNode.offsetWidth || 0);
+                  const styles = globalThis.getComputedStyle?.(track);
+                  const gap = Number.parseFloat(styles?.columnGap || styles?.gap || "0") || 0;
+                  const stride = Math.max(1, cardWidth + gap);
+                  visibleCardCount = Math.max(1, Math.ceil(trackWidth / stride));
+                  measuredTrackWidth = trackWidth;
+                }
+                const projectedLastVisible = Number(requestContext.focusedIndex) + visibleCardCount - 1;
+                const loadAheadStart = Math.max(0, mountedCount - MODERN_HOME_CONSTANTS.trackPaginationLoadAheadItems);
+                if (projectedLastVisible < loadAheadStart) {
+                  return;
+                }
+              }
+              runPagination({ assumeNearEnd: true });
+            },
+            waitsForDwell
+              ? MODERN_HOME_CONSTANTS.trackPaginationPrefetchDwellConstrainedMs
+              : MODERN_HOME_CONSTANTS.trackPaginationPrefetchDelayMs
+          );
         };
         handler.cancelPending = () => {
           if (scrollTimer) {

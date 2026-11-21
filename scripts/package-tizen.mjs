@@ -7,6 +7,7 @@ import JSZip from "jszip";
 import { readAppMetadata, syncVersionFiles } from "./appMetadata.mjs";
 import { compatibilityPolicy } from "./compatibilityPolicy.mjs";
 import { writeRuntimeEnvScriptFile } from "./envProperties.mjs";
+import { pruneCssFileForPlatform } from "./pruneCssForPlatform.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -26,6 +27,8 @@ const tizenEngineFsServiceRelativePath = "services/tizen/enginefs-service.js";
 const tizenEngineFsRuntimeDirRelativePath = "services/tizen/runtime";
 const tizenPluginServiceRelativePath = "services/tizen/plugin-service.js";
 const tizenPluginServiceSourceRelativePath = "services/plugin-http.cjs";
+// Mozilla root store for the Node 4 service runtime of Tizen 5.5 (see plugin-http.cjs).
+const tizenPluginServiceCaRelativePath = "services/plugin-ca.pem";
 const tizenEngineFsServicePort = 2710;
 const tizenPluginServicePort = 2711;
 
@@ -181,7 +184,9 @@ ${pluginServiceBridge}  <link rel="stylesheet" href="css/bundle.css" />
 </head>
 <body>
   <script src="boot-guard.js"></script>
-  <script src="core-js.bundle.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
+  <!-- Deferred like main.js: keeps document order (core-js runs before main.js
+       loads the app bundle) without parser-blocking first paint on single-core TVs. -->
+  <script defer src="core-js.bundle.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
   <script defer src="main.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
 </body>
 </html>
@@ -207,9 +212,13 @@ window.__NUVIO_TIZEN_PLUGIN_SERVICE_ID__ = ${JSON.stringify(configuredPluginServ
 
 var tvInput = window.tizen && window.tizen.tvinputdevice;
 if (tvInput && typeof tvInput.registerKey === "function") {
+  // Registered once here, before the app bundle loads, so the keys work during
+  // the compatibility gate. The Tizen adapter skips its own registration when
+  // this flag is set (the two lists used to overlap on eight media keys).
   [
     "Back",
     "Return",
+    "Info",
     "MediaPlay",
     "MediaPause",
     "MediaPlayPause",
@@ -223,6 +232,7 @@ if (tvInput && typeof tvInput.registerKey === "function") {
       tvInput.registerKey(keyName);
     } catch (_) {}
   });
+  window.__NUVIO_TIZEN_MEDIA_KEYS_REGISTERED__ = true;
 }
 
 function loadScript(src) {
@@ -243,7 +253,7 @@ function loadScript(src) {
 
 function startNuvioApp() {
   loadScript("nuvio.env.js");
-  loadScript("assets/libs/qrcode-generator.js");
+  // assets/libs/qrcode-generator.js is loaded on demand by the QR screens.
   loadScript("app.bundle.js");
 }
 
@@ -289,8 +299,16 @@ async function stageTizenPluginService() {
       path.join(stagingDir, tizenPluginServiceRelativePath)
     ),
     cp(
+      path.join(rootDir, "services/custom-poster-config.cjs"),
+      path.join(stagingDir, "services/custom-poster-config.cjs")
+    ),
+    cp(
       path.join(rootDir, tizenPluginServiceSourceRelativePath),
       path.join(stagingDir, tizenPluginServiceSourceRelativePath)
+    ),
+    cp(
+      path.join(rootDir, tizenPluginServiceCaRelativePath),
+      path.join(stagingDir, tizenPluginServiceCaRelativePath)
     )
   ]);
 }
@@ -351,6 +369,9 @@ async function stagePackage({
       "utf8"
     )
   ]);
+  await pruneCssFileForPlatform(path.join(stagingDir, "css", "bundle.css"), "tizen");
+  // webOS-only library; nothing in the Tizen package references it.
+  await rm(path.join(stagingDir, "assets", "libs", "webOSTV.js"), { force: true });
   if (includeEngineFsService) {
     await stageTizenEngineFsService();
   }
@@ -595,13 +616,19 @@ function requiredTizenServiceFiles({
       ? [
           tizenEngineFsServiceRelativePath,
           `${tizenEngineFsRuntimeDirRelativePath}/media-http.cjs`,
+          `${tizenEngineFsRuntimeDirRelativePath}/playback-proxy-patch.cjs`,
+          `${tizenEngineFsRuntimeDirRelativePath}/proxy-redirect-report-patch.cjs`,
           `${tizenEngineFsRuntimeDirRelativePath}/tx3g-subtitle-parser.cjs`,
           `${tizenEngineFsRuntimeDirRelativePath}/tx3g-subtitle-service.cjs`,
           `${tizenEngineFsRuntimeDirRelativePath}/embedded-text-subtitle-parser.cjs`
         ]
       : []),
     ...(requirePluginService
-      ? [tizenPluginServiceRelativePath, tizenPluginServiceSourceRelativePath]
+      ? [
+          tizenPluginServiceRelativePath,
+          tizenPluginServiceSourceRelativePath,
+          tizenPluginServiceCaRelativePath
+        ]
       : [])
   ];
 }

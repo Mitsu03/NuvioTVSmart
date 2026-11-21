@@ -1,4 +1,15 @@
 import * as internals from "./homeScreenContext.js";
+import { isModernTvProfile } from "../../../platform/tvPerformancePolicy.js";
+import { getTvRuntimePerformanceProfile } from "../../../platform/tvRuntimePerformance.js";
+
+function markCameraScrollActive(container) {
+  if (!container || !isModernTvProfile(getTvRuntimePerformanceProfile())) return;
+  container.classList.add("is-camera-scrolling");
+}
+
+function clearCameraScrollActive(container) {
+  container?.classList?.remove?.("is-camera-scrolling");
+}
 
 export function createHomeScreenMethods02() {
   const { MODERN_HOME_CONSTANTS, findHomeFocusIdentityMatch, MODERN_CAMERA_PAN_EASING } = internals;
@@ -135,6 +146,11 @@ export function createHomeScreenMethods02() {
         springState[key] = null;
         springMap.set(container, springState);
       }
+      const otherKey = key === "y" ? "x" : "y";
+      const stillAnimating = Boolean((state?.[otherKey] && state[otherKey] !== null) || springState?.[otherKey]?.raf);
+      if (!stillAnimating) {
+        clearCameraScrollActive(container);
+      }
     },
     animateScroll(container, axis, targetValue, duration = 150, options = {}) {
       if (!container) {
@@ -151,6 +167,12 @@ export function createHomeScreenMethods02() {
           : Math.max(0, container.scrollWidth - container.clientWidth);
       const nextValue = Math.max(0, Math.min(max, Math.round(targetValue)));
       const key = axis === "y" ? "y" : "x";
+      if (this.shouldUseImmediateFocusScroll()) {
+        // Camera-follow callers must honor the same immediate policy as focus moves.
+        this.cancelScrollAnimation(container, axis);
+        container[property] = nextValue;
+        return;
+      }
       const startValue = Number(container[property] || 0);
       if (Math.abs(startValue - nextValue) <= 1) {
         container[property] = nextValue;
@@ -188,9 +210,11 @@ export function createHomeScreenMethods02() {
         } else {
           existing[key] = null;
           map.set(container, existing);
+          clearCameraScrollActive(container);
         }
       };
 
+      markCameraScrollActive(container);
       existing[key] = requestAnimationFrame(tick);
       map.set(container, existing);
     },
@@ -205,6 +229,11 @@ export function createHomeScreenMethods02() {
           : Math.max(0, container.scrollWidth - container.clientWidth);
       const nextValue = Math.max(0, Math.min(max, Math.round(targetValue)));
       const key = axis === "y" ? "y" : "x";
+      if (this.shouldUseImmediateFocusScroll()) {
+        this.cancelScrollAnimation(container, axis);
+        container[property] = nextValue;
+        return;
+      }
       const prefersReducedMotion = globalThis?.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
       if (prefersReducedMotion) {
         container[property] = nextValue;
@@ -267,6 +296,7 @@ export function createHomeScreenMethods02() {
           container[property] = state.target;
           existing[key] = null;
           springMap.set(container, existing);
+          clearCameraScrollActive(container);
           return;
         }
 
@@ -275,6 +305,7 @@ export function createHomeScreenMethods02() {
         springMap.set(container, existing);
       };
 
+      markCameraScrollActive(container);
       state.raf = requestAnimationFrame(tick);
       existing[key] = state;
       springMap.set(container, existing);

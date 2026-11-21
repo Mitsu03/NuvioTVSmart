@@ -1,11 +1,13 @@
+import { syncHtmlSubtitleClearance } from "./subtitleOverlayClearance.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
 export function createPlayerScreenMethods31() {
-  const { PlayerController, PlayerSettingsStore, t, escapeHtml, formatNextEpisodeAirDate } = internals;
+  const { PlayerController, PlayerSettingsStore, t, escapeHtml, formatNextEpisodeAirDate, TrackingScrobbleService } = internals;
 
   return {
     seekPlaybackSeconds(seconds, { preserveSkipIntroSuppression = false } = {}) {
+      if (this.isLivePlayback()) return false;
       const currentSeconds = Number(this.getPlaybackCurrentSeconds());
       const targetSeconds = Number(seconds);
       if (Number.isFinite(currentSeconds) && Number.isFinite(targetSeconds) && targetSeconds < currentSeconds - 0.5) {
@@ -14,17 +16,31 @@ export function createPlayerScreenMethods31() {
       if (!preserveSkipIntroSuppression) {
         this.clearSkipIntroSeekSuppression();
       }
+      // Android resends the current player state to tracking add-ons after a seek.
+      TrackingScrobbleService?.seeked?.(() => this.buildScrobbleContext());
       // Mark user-initiated seeks so the player can stay responsive while it settles.
       this.seekLoadingBaselineSeconds = this.getPlaybackCurrentSeconds();
       this.seekLoadingTargetSeconds = Number(seconds || 0);
+      this.seekLoadingSettled = false;
+      this.seekLoadingVisualComplete = false;
+      this.seekLoadingProgressSeconds = null;
+      this.seekLoadingProgressAt = 0;
+      this.seekLoadingStartedAt = Date.now();
       this.seekLoading = true;
       this.updateLoadingVisibility();
       this.prepareBitmapSubtitleForSeek(this.seekLoadingTargetSeconds);
       this.prepareWebOsEmbeddedTextSubtitleForSeek(this.seekLoadingTargetSeconds);
       if (typeof PlayerController.seekToSeconds === "function") {
-        const didSeek = Boolean(PlayerController.seekToSeconds(seconds));
+        const didSeek = Boolean(
+          PlayerController.seekToSeconds(seconds, {
+            exact: Boolean(this.isPartySynced?.()),
+            paused: this.getPlaybackControlPaused?.() ?? Boolean(this.paused)
+          })
+        );
         if (!didSeek) {
           this.clearSeekLoading();
+        } else {
+          this.startSeekLoadingWatchdog();
         }
         return didSeek;
       }
@@ -107,6 +123,14 @@ export function createPlayerScreenMethods31() {
       }
     },
     updateLoadingVisibility() {
+      if (this.isBufferingForPauseOverlay()) this.dismissPauseOverlay();
+      if (!this.loadingVisible && !this.isStartupErrorVisible() && !this.isExternalFrameMode()) {
+        if (this.isStartupGateReleaseReady()) this.releaseStartupAudioGate();
+        // Post-first-frame buffering can hide loading before the completion timer runs.
+        if (PlayerController.startupPresentationAudioMuted && this.isStartupLogoDismissReady()) {
+          PlayerController.setStartupPresentationAudioMuted(false);
+        }
+      }
       const overlay = this.uiRefs?.loadingOverlay;
       const bufferingSpinner = this.uiRefs?.bufferingSpinner;
       if (!overlay) {
@@ -195,6 +219,7 @@ export function createPlayerScreenMethods31() {
       const hidden = !this.isNextEpisodeCardVisible();
 
       card.classList.toggle("hidden", hidden);
+      if (hidden) syncHtmlSubtitleClearance(this);
       if (hidden) {
         card.innerHTML = "";
         this.nextEpisodeCardRenderedKey = "";
@@ -259,6 +284,7 @@ export function createPlayerScreenMethods31() {
         this.nextEpisodeCardRenderedKey = renderKey;
       }
       this.syncNextEpisodeCardFocusState();
+      syncHtmlSubtitleClearance(this);
     }
   };
 }

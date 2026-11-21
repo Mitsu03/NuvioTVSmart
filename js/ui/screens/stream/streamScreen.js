@@ -1,3 +1,4 @@
+import { createStreamScreenPartyMethods } from "./streamScreenParty.js";
 import { Router } from "../../navigation/routerState.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { streamRepository } from "../../../data/repository/streamRepository.js";
@@ -159,5 +160,6 @@ export const StreamScreen = {
   ...createStreamScreenMethods08(),
   ...createStreamScreenMethods09(),
   ...createStreamScreenMethods10(),
-  ...createStreamScreenMethods11()
+  ...createStreamScreenMethods11(),
+  ...createStreamScreenPartyMethods()
 };

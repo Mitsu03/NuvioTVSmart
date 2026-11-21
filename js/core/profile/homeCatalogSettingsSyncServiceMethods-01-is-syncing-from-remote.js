@@ -59,13 +59,22 @@ export function createHomeCatalogSettingsSyncServiceMethods01() {
           await this.push(resolvedProfileId);
           return false;
         }
-        if (payloadSignature(remote.payload) === payloadSignature(localPayload)) {
+        // Compare the installed rows after remote application, rather than a
+        // partial remote list against the complete local inventory.
+        const effectivePayload = await buildLocalPayload(resolvedProfileId, remote.payload);
+        if (pendingPushVersion(pullToken) != null) {
+          this.completedInitialPullTokens.add(pullToken);
+          await this.push(resolvedProfileId);
+          return false;
+        }
+        const changed = payloadSignature(effectivePayload) !== payloadSignature(localPayload);
+        applyPayload(resolvedProfileId, remote.payload, effectivePayload);
+        if (!changed) {
           if (pullToken) {
             this.completedInitialPullTokens.add(pullToken);
           }
           return false;
         }
-        applyPayload(resolvedProfileId, remote.payload);
         if (pullToken) {
           this.completedInitialPullTokens.add(pullToken);
         }
@@ -122,6 +131,7 @@ export function createHomeCatalogSettingsSyncServiceMethods01() {
         return;
       }
       const generation = this.syncGeneration;
+      const profileVersion = internals.ProfileManager.getProfileDataVersion(resolvedProfileId);
       const existingTimer = this.pushTimers.get(resolvedProfileId);
       if (existingTimer) {
         clearTimeout(existingTimer);
@@ -129,12 +139,17 @@ export function createHomeCatalogSettingsSyncServiceMethods01() {
       const cooldownMs = getSyncBackoffRemainingMs();
       const effectiveDelayMs = Math.max(PUSH_DEBOUNCE_MS, Number(delayMs) || 0, cooldownMs > 0 ? cooldownMs + 50 : 0);
       const timerId = setTimeout(async () => {
-        if (generation !== this.syncGeneration) {
+        if (generation !== this.syncGeneration || profileVersion !== internals.ProfileManager.getProfileDataVersion(resolvedProfileId)) {
           return;
         }
         this.pushTimers.delete(resolvedProfileId);
         const didPush = await this.push(resolvedProfileId);
-        if (generation === this.syncGeneration && !didPush && isSyncBackoffActive()) {
+        if (
+          generation === this.syncGeneration &&
+          profileVersion === internals.ProfileManager.getProfileDataVersion(resolvedProfileId) &&
+          !didPush &&
+          isSyncBackoffActive()
+        ) {
           this.triggerPush(resolvedProfileId);
         }
       }, effectiveDelayMs);

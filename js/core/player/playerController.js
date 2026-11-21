@@ -1,3 +1,5 @@
+import { createWebOsDtsAudioMethods } from "../../platform/webos/webosDtsAudioTranscoder.js";
+import { createWebOsExactSeekMethods } from "../../platform/webos/webosExactSeek.js";
 import { watchProgressRepository } from "../../data/repository/watchProgressRepository.js";
 import { watchedItemsRepository } from "../../data/repository/watchedItemsRepository.js";
 import { watchedSeriesReconciliationService } from "../../data/repository/watchedSeriesReconciliationService.js";
@@ -16,10 +18,7 @@ import { dashJsEngine } from "./engines/dashJsEngine.js";
 import { resolvePlatformAvplayEngine } from "./engines/platformAvplayEngine.js";
 import { isTerminalHlsHttpStatus } from "./hlsNetworkErrorPolicy.js";
 import { isShortPlaceholderDuration } from "./naturalPlaybackCompletion.js";
-import {
-  applyWebOsAudioCodecOverrides,
-  detectWebOsAudioCapabilities
-} from "../../platform/webos/webosAudioCapabilities.js";
+import { detectWebOsAudioCapabilities } from "../../platform/webos/webosAudioCapabilities.js";
 import { WebOsLunaService } from "../../platform/webos/webosLunaService.js";
 import { subscribeWebOsCompanionService } from "../../platform/webos/webosCompanionService.js";
 import { WebOSPlayerExtensions } from "../../platform/webos/webosPlayerExtensions.js";
@@ -87,7 +86,6 @@ export {
   resolvePlatformAvplayEngine,
   isTerminalHlsHttpStatus,
   isShortPlaceholderDuration,
-  applyWebOsAudioCodecOverrides,
   detectWebOsAudioCapabilities,
   WebOsLunaService,
   subscribeWebOsCompanionService,
@@ -112,6 +110,7 @@ export {
   WEBOS_MEDIA_TYPE_PROBE_TIMEOUT_MS,
   logEngineFsDebug,
   logTizenAvPlayDebug,
+  isTizenAvPlayDebugEnabled,
   logWebOsPlaybackDebug,
   isValidAvPlayAudioTrackSelectionState,
   isValidAvPlaySubtitleTrackSelectionState,
@@ -153,8 +152,12 @@ function logEngineFsDebug(...args) {
   }
 }
 
+function isTizenAvPlayDebugEnabled() {
+  return Boolean(globalThis.__NUVIO_DEBUG_TIZEN_AVPLAY__ || globalThis.__NUVIO_DEBUG_ENGINEFS__);
+}
+
 function logTizenAvPlayDebug(...args) {
-  if (globalThis.__NUVIO_DEBUG_TIZEN_AVPLAY__ || globalThis.__NUVIO_DEBUG_ENGINEFS__) {
+  if (isTizenAvPlayDebugEnabled()) {
     console.info(...args);
   }
 }
@@ -283,6 +286,7 @@ export const PlayerController = {
   hlsInstance: null,
   dashInstance: null,
   playbackEngine: "none",
+  currentPlaybackIsLive: false,
   avplayActive: false,
   avplayUrl: "",
   avplayAudioTracks: [],
@@ -300,6 +304,7 @@ export const PlayerController = {
   avplaySubtitlesSilent: false,
   avplayNativeSubtitleRendering: false,
   avplaySubtitleRenderMode: "native",
+  avplaySubtitleKeepSilent: false,
   avplayExternalSubtitlePath: "",
   avplayExternalSubtitleDelayMs: 0,
   appliedAvPlayExternalSubtitleDelayKey: "",
@@ -347,8 +352,6 @@ export const PlayerController = {
   webosDeviceInfoPromise: null,
   webosAudioCapabilities: null,
   webosUnsupportedAudioCodecs: new Set(["dts", "truehd"]),
-  forceDtsAudio: false,
-  forceTrueHdAudio: false,
   viewportSyncHandler: null,
   avplayDisplayRect: null,
   avplayDisplayMethod: "PLAYER_DISPLAY_MODE_FULL_SCREEN",
@@ -380,5 +383,7 @@ export const PlayerController = {
   ...createPlayerControllerMethods17(),
   ...createPlayerControllerMethods18(),
   ...createPlayerControllerMethods19(),
-  ...createPlayerControllerMethods20()
+  ...createPlayerControllerMethods20(),
+  ...createWebOsDtsAudioMethods(),
+  ...createWebOsExactSeekMethods()
 };

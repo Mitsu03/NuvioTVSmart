@@ -64,7 +64,8 @@ export function parseDiscoveryDocument(discoveryUrl, source) {
 
   const capabilities = {
     emailPasswordAuth: payload?.capabilities?.email_password_auth === true,
-    tvLogin: payload?.capabilities?.tv_login === true
+    tvLogin: payload?.capabilities?.tv_login === true,
+    watchParty: payload?.capabilities?.watch_party === true
   };
   if (!capabilities.emailPasswordAuth && !capabilities.tvLogin) {
     throw serverError("no_supported_auth");

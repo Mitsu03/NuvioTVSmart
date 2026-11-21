@@ -122,7 +122,7 @@ export function renderTmdbIntegrationDetail(model) {
               focusKey: "integration:tmdb:releaseDates",
               title: t("tmdb_release_dates_title", {}, "Release Dates"),
               subtitle: t("tmdb_release_dates_subtitle", {}, "Release and air dates from TMDB"),
-              checked: model.tmdb.useReleaseDates !== false,
+              checked: Boolean(model.tmdb.useReleaseDates),
               disabled: !model.tmdb.enabled
             })}
             ${this.renderToggleRow({

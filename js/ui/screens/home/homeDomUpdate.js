@@ -1,19 +1,42 @@
 import { getHomeFocusIdentity } from "./homeFocusPolicy.js";
+import { releaseHomeArtwork } from "../../images/tvPosterRescaler.js";
 
 // Compare generated markup, rather than the live DOM: focus, image hydration,
 // expansion and trailer playback all add state that a data refresh must retain.
-const sourceByNode = new WeakMap();
+// Stored on the node itself: Chromium 63's WeakMap rehashes on insert once the
+// table is full of collected keys, and every hero update registers new nodes
+// (measured on a 2019 Tizen: 55 ms per D-pad press spent in WeakMap.set).
+const SOURCE_KEY = "__nuvioHomeSource";
+const sourceByNode = {
+  get: (node) => node?.[SOURCE_KEY],
+  set: (node, value) => {
+    node[SOURCE_KEY] = value;
+  }
+};
 const mountedShells = new WeakMap();
+
+// A row whose generated markup did not change is sent as this empty stand-in:
+// parsing all the rows again on every data refresh was half of the refresh
+// (152 of 304 ms on a 2025 webOS set). Only valid for a row that is mounted.
+const UNCHANGED_ROW = "data-home-row-unchanged";
+export function unchangedHomeRowMarkup(escapedRowKey) {
+  return `<section data-row-key="${escapedRowKey}" ${UNCHANGED_ROW}></section>`;
+}
 
 export function hasMountedHomeDom(container) {
   const shell = mountedShells.get(container);
   return Boolean(shell && shell === container.querySelector(".home-shell"));
 }
 
+// A sibling walk: this runs for every node of every card that is mounted or
+// appended, and Array.from(childNodes).filter() was two thirds of that cost on
+// Chromium 63.
 function children(node) {
-  return Array.from(node.childNodes).filter(
-    (child) => child.nodeType !== 3 || child.textContent.trim()
-  );
+  const result = [];
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.nodeType !== 3 || child.textContent.trim()) result.push(child);
+  }
+  return result;
 }
 
 function key(node) {
@@ -31,18 +54,28 @@ function key(node) {
 }
 
 function signature(node) {
-  return node.nodeType === 1 ? node.outerHTML : node.textContent;
+  if (node.nodeType !== 1) return node.textContent;
+  // Rows/cards are useful unchanged-subtree boundaries. Serializing every
+  // wrapper and descendant repeats the same markup at each ancestor depth.
+  // Other elements still reconcile attributes and children from source nodes.
+  return node.dataset.rowKey || node.classList.contains("home-content-card")
+    ? node.outerHTML
+    : undefined;
 }
 
 function snapshot(source) {
-  // Shallow nodes cannot retain entire detached markup trees through parentNode.
-  return { node: source.cloneNode(false), markup: signature(source) };
+  // Keep detached lazy images out of the live document's native observer.
+  return {
+    node: getInertDocument(source.ownerDocument).importNode(source, false),
+    markup: signature(source)
+  };
 }
 
 function remember(node, source) {
   sourceByNode.set(node, snapshot(source));
   const liveChildren = children(node);
-  children(source).forEach((child, index) => remember(liveChildren[index], child));
+  const sourceChildren = source === node ? liveChildren : children(source);
+  sourceChildren.forEach((child, index) => remember(liveChildren[index], child));
 }
 
 export function registerHomeDomNodes(nodes) {
@@ -50,6 +83,12 @@ export function registerHomeDomNodes(nodes) {
 }
 
 function updateAttributes(node, previous, next) {
+  if (
+    node.tagName === "IMG" &&
+    previous.getAttribute("data-src") !== next.getAttribute("data-src")
+  ) {
+    releasePoster(node);
+  }
   const names = new Set(
     [...Array.from(previous.attributes), ...Array.from(next.attributes)].map((attr) => attr.name)
   );
@@ -105,9 +144,23 @@ function updateAttributes(node, previous, next) {
   }
 }
 
+function releasePoster(image) {
+  if (!image.dataset?.originalSrc) return;
+  releaseHomeArtwork(image.getAttribute("src"));
+  delete image.dataset.originalSrc;
+}
+
+function releasePosters(node) {
+  if (node.nodeType !== 1) return;
+  if (node.matches("img.content-poster")) releasePoster(node);
+  node.querySelectorAll("img.content-poster").forEach(releasePoster);
+}
+
 function updateNode(node, source, protectedNode) {
+  if (source.nodeType === 1 && source.hasAttribute(UNCHANGED_ROW)) return;
   const previous = sourceByNode.get(node);
-  if (previous.markup === signature(source)) return;
+  const markup = signature(source);
+  if (markup !== undefined && previous.markup === markup) return;
   if (node.nodeType === 1) {
     updateAttributes(node, previous.node, source);
     updateChildren(node, source, protectedNode);
@@ -140,7 +193,12 @@ function updateChildren(parent, source, protectedNode) {
     remember(inserted, child);
     return inserted;
   });
-  available.forEach((nodes) => nodes.forEach((node) => node.remove()));
+  available.forEach((nodes) =>
+    nodes.forEach((node) => {
+      releasePosters(node);
+      node.remove();
+    })
+  );
 
   const desiredSet = new Set(desired);
   const nextManagedSibling = (node) => {
@@ -172,13 +230,25 @@ function updateChildren(parent, source, protectedNode) {
   }
 }
 
+let inertDocument = null;
+
+// The comparison tree is parsed in a document without a browsing context, so its
+// <img> nodes never start fetching or decoding; inserted clones load once adopted.
+function getInertDocument(ownerDocument) {
+  if (!inertDocument) {
+    inertDocument = ownerDocument.implementation?.createHTMLDocument?.("") || ownerDocument;
+  }
+  return inertDocument;
+}
+
 export function updateHomeDom(container, markup, { incremental = false, focusedNode = null } = {}) {
-  const source = container.ownerDocument.createElement("div");
+  const source = getInertDocument(container.ownerDocument).createElement("div");
   source.innerHTML = markup;
   const canUpdate = incremental && hasMountedHomeDom(container);
   if (canUpdate) {
     updateChildren(container, source, focusedNode);
   } else {
+    releasePosters(container);
     container.innerHTML = markup;
     remember(container, source);
   }

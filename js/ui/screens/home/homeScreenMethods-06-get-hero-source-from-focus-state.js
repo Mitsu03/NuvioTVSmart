@@ -10,7 +10,9 @@ export function createHomeScreenMethods06() {
     isPosterWatchedType,
     partitionContinueWatchingRows,
     normalizeContinueWatchingItem,
-    isCloudContinueWatchingItem
+    isCloudContinueWatchingItem,
+    PlayerSettingsStore,
+    isAutoPlayEffectivelyEnabled
   } = internals;
 
   return {
@@ -78,13 +80,21 @@ export function createHomeScreenMethods06() {
           label: t("cw_action_go_to_details", {}, "Go to details")
         });
       }
-      if (!isCloud && this.showContinueWatchingManualPlayOption) {
+      // Android offers manual source selection only while auto-play would pick one.
+      if (!isCloud && isAutoPlayEffectivelyEnabled(PlayerSettingsStore.get())) {
         options.push({ action: "playManually", label: t("play_manually", {}, "Play manually") });
       }
       if (!item.isNextUp) {
         options.push({
           action: "startOver",
           label: t("cw_action_start_from_beginning", {}, "Start from beginning")
+        });
+      }
+      // Android only offers this once the next episode has aired.
+      if (!isCloud && (!item.isNextUp || item.hasAired !== false)) {
+        options.push({
+          action: "markWatched",
+          label: t("hero_mark_watched", {}, "Mark as watched")
         });
       }
       options.push({ action: "remove", label: t("cw_action_remove", {}, "Remove") });
@@ -202,6 +212,7 @@ export function createHomeScreenMethods06() {
       if (!state || !viewport) {
         return false;
       }
+      this.prepareHomeRowsForRestore(state);
       Object.entries(state.trackStates || {}).forEach(([rowKey, scrollLeft]) => {
         const track = this.container?.querySelector(`[data-track-row-key="${rowKey}"]`);
         if (track) {

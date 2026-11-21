@@ -1,3 +1,4 @@
+import { MediaServerSyncService } from "./mediaServerSyncService.js";
 import { AuthManager } from "../auth/authManager.js";
 import { LocalStore } from "../storage/localStore.js";
 import { SessionStore } from "../storage/sessionStore.js";
@@ -29,6 +30,7 @@ import { createStartupSyncServiceMethods02 } from "./startupSyncServiceMethods-0
 import { createStartupSyncServiceMethods03 } from "./startupSyncServiceMethods-03-request-library-sync-now.js";
 
 export {
+  MediaServerSyncService,
   AuthManager,
   LocalStore,
   SessionStore,

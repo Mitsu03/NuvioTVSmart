@@ -1,3 +1,4 @@
+import { customPosterForItem, posterFallbackAttributes } from "../../../core/poster/customPoster.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./catalogSeeAllScreen.js";
 
@@ -228,6 +229,7 @@ export function createCatalogSeeAllScreenMethods02() {
           : allItems;
       const cards = renderItems.length
         ? renderItems
+            .map((item) => customPosterForItem(item, "home"))
             .map(
               (item, index) => `
               <article class="seeall-card focusable"
@@ -246,7 +248,7 @@ export function createCatalogSeeAllScreenMethods02() {
                 <div class="seeall-card-poster-wrap">
                   ${
                     item.poster
-                      ? `<img class="seeall-card-poster-image" src="${escapeHtml(item.poster)}" alt="${escapeHtml(item.name || "content")}" loading="lazy" decoding="async" />`
+                      ? `<img class="seeall-card-poster-image"${posterFallbackAttributes(item)} src="${escapeHtml(item.poster)}" alt="" loading="lazy" decoding="async" />`
                       : `<div class="seeall-card-poster placeholder"></div>`
                   }
                   ${isTitleItemWatched(item, this.watchedTitleIds) ? renderTitleWatchedBadge() : ""}

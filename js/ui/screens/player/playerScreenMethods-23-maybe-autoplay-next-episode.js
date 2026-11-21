@@ -1,3 +1,5 @@
+import { buildNextFilename } from "../../../core/streams/filenameEpisodeMatcher.js";
+import { scraperIdFromPluginBingeGroup } from "../../../core/streams/pluginBingeGroup.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./playerScreenContext.js";
 
@@ -94,7 +96,13 @@ export function createPlayerScreenMethods23() {
         return [];
       }
       const forceRefresh = options.forceRefresh === true;
-      const cacheKey = this.getStreamCacheKey(normalizedVideoId, normalizedType, options.season, options.episode);
+      const cacheKey = this.getStreamCacheKey(
+        normalizedVideoId,
+        normalizedType,
+        options.season,
+        options.episode,
+        options.preferredPluginOnly === true
+      );
       const cache = this.streamCandidatesByVideoId || (this.streamCandidatesByVideoId = new Map());
       if (!forceRefresh && cache.has(cacheKey)) {
         const cached = cache.get(cacheKey);
@@ -108,7 +116,9 @@ export function createPlayerScreenMethods23() {
       if (forceRefresh) {
         loadPromises.delete(cacheKey);
       }
-      if (!forceRefresh && loadPromises.has(cacheKey)) {
+      // Progressive callers must subscribe to the repository session, including
+      // an already running next-episode prefetch, rather than await its final result.
+      if (!forceRefresh && !options.onChunk && loadPromises.has(cacheKey)) {
         const loaded = await loadPromises.get(cacheKey);
         const loadedStreams = orderStreamsByAddonOrder(Array.isArray(loaded) ? loaded.map((stream) => ({ ...stream })) : [], [], {
           isDirectDebrid: (stream) => DebridStreamPresentation.isDirectDebrid(stream)
@@ -124,6 +134,10 @@ export function createPlayerScreenMethods23() {
           season: options.season ?? null,
           episode: options.episode ?? null,
           forceRefresh,
+          // Continuing a plugin series keeps the playing provider first and tries
+          // only it until it returns nothing.
+          priorityBingeGroup: options.priorityBingeGroup || null,
+          preferredPluginOnly: options.preferredPluginOnly === true,
           onChunk: (chunkResult) => {
             const chunkItems = flattenStreamGroups(chunkResult);
             if (!chunkItems.length) {
@@ -167,7 +181,7 @@ export function createPlayerScreenMethods23() {
       return streamItems;
     },
     getCurrentStreamBingeGroup() {
-      const currentStream = this.getStreamCandidateByUrl(this.activePlaybackUrl) || this.getCurrentStreamCandidate();
+      const currentStream = this.getCurrentStreamCandidate() || this.getStreamCandidateByUrl(this.activePlaybackUrl);
       return String(currentStream?.behaviorHints?.bingeGroup || currentStream?.raw?.behaviorHints?.bingeGroup || "").trim();
     },
     async selectNextEpisodeStreamByAutoPlayPolicy(streamItems = [], settings = PlayerSettingsStore.get(), options = {}) {
@@ -180,7 +194,7 @@ export function createPlayerScreenMethods23() {
       const shouldAutoSelectInManualMode = mode === "MANUAL" && (Boolean(settings.autoplayNextEpisode) || preferBingeGroup);
       const preferredBingeGroup = preferBingeGroup ? this.getCurrentStreamBingeGroup() : "";
       const bingeGroupOnlyManualMode = shouldAutoSelectInManualMode && preferBingeGroup;
-      if (bingeGroupOnlyManualMode && !preferredBingeGroup) {
+      if (bingeGroupOnlyManualMode && !preferredBingeGroup && options.bingeGroupOnly) {
         return null;
       }
       const installedAddonNames =
@@ -191,8 +205,16 @@ export function createPlayerScreenMethods23() {
                 .map((addon) => String(addon?.displayName || addon?.name || "").trim())
                 .filter(Boolean)
             );
+      const current = this.getCurrentStreamCandidate();
+      const filename = current?.behaviorHints?.filename || current?.raw?.behaviorHints?.filename || "";
+      const next = options.nextEpisode || this.resolveNextEpisodeInfo();
+      const expectedFilename = next
+        ? buildNextFilename(filename, this.params?.season, this.params?.episode ?? 0, next.season, next.episode ?? 0) || filename
+        : filename;
       return selectAutoPlayStream(streamItems, {
-        mode: shouldAutoSelectInManualMode ? "FIRST_STREAM" : mode,
+        preferredFilename: expectedFilename,
+        filenameOnlyFallback: !options.bingeGroupOnly,
+        mode: shouldAutoSelectInManualMode && (!bingeGroupOnlyManualMode || preferredBingeGroup) ? "FIRST_STREAM" : mode,
         source: shouldAutoSelectInManualMode ? "ALL_SOURCES" : String(settings.streamAutoPlaySource || "ALL_SOURCES"),
         regexPattern: shouldAutoSelectInManualMode ? "" : String(settings.streamAutoPlayRegex || ""),
         installedAddonNames,
@@ -237,7 +259,8 @@ export function createPlayerScreenMethods23() {
       const trySelect = async (bingeGroupOnly) => {
         const selected = await this.selectNextEpisodeStreamByAutoPlayPolicy(latestStreams, settings, {
           bingeGroupOnly,
-          installedAddonNames
+          installedAddonNames,
+          nextEpisode
         });
         if (selected) {
           finish(selected);
@@ -253,7 +276,8 @@ export function createPlayerScreenMethods23() {
           if (timeoutElapsed) {
             finish(
               await this.selectNextEpisodeStreamByAutoPlayPolicy(latestStreams, settings, {
-                installedAddonNames
+                installedAddonNames,
+                nextEpisode
               })
             );
           }
@@ -266,7 +290,8 @@ export function createPlayerScreenMethods23() {
           timeoutElapsed = true;
           if (latestStreams.length) {
             void this.selectNextEpisodeStreamByAutoPlayPolicy(latestStreams, settings, {
-              installedAddonNames
+              installedAddonNames,
+              nextEpisode
             }).then((selected) => finish(selected));
           }
         }, timeoutSeconds * 1000);
@@ -279,13 +304,16 @@ export function createPlayerScreenMethods23() {
       void this.getPlayableStreamsForVideo(nextEpisode.videoId, itemType, {
         season: nextEpisode.season,
         episode: nextEpisode.episode,
+        priorityBingeGroup: this.getCurrentStreamBingeGroup(),
+        preferredPluginOnly: Boolean(scraperIdFromPluginBingeGroup(this.getCurrentStreamBingeGroup())),
         onChunk
       })
         .then(async (streams) => {
           latestStreams = Array.isArray(streams) ? streams : latestStreams;
           finish(
             await this.selectNextEpisodeStreamByAutoPlayPolicy(latestStreams, settings, {
-              installedAddonNames
+              installedAddonNames,
+              nextEpisode
             })
           );
         })

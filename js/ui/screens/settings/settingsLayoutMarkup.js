@@ -1,3 +1,4 @@
+import { renderCustomPosterSettings } from "./settingsCustomPosterSection.js";
 /* eslint-disable no-unused-vars */
 import * as internals from "./settingsScreenContext.js";
 
@@ -16,6 +17,13 @@ export function renderLayoutMarkup(model) {
       : continueWatchingSortMode === "streaming_style"
         ? t("settings.layout.continueWatchingSort.streamingStyle", {}, "Streaming Style")
         : t("settings.layout.continueWatchingSort.default", {}, "Default");
+  const continueWatchingClickAction = String(model.layout.continueWatchingClickAction || "STREAM");
+  const continueWatchingClickLabel =
+    continueWatchingClickAction === "DETAILS"
+      ? t("layout_cw_click_details", {}, "Open Details")
+      : continueWatchingClickAction === "DETAILS_FOR_UPCOMING"
+        ? t("layout_cw_click_details_upcoming", {}, "Details for Upcoming Only")
+        : t("layout_cw_click_stream", {}, "Open Stream");
   const homeRatingsShown = model.layout.homeImdbRatingsVisibility !== "HIDE_ALL";
   const detailRatingsVisibility = String(model.layout.detailImdbRatingsVisibility || "SHOW_ALL");
   const detailRatingsVisibilityLabel =
@@ -39,6 +47,20 @@ export function renderLayoutMarkup(model) {
                     title: t("settings.layout.landscapePosters.title"),
                     subtitle: t("settings.layout.landscapePosters.subtitle"),
                     checked: Boolean(model.layout.modernLandscapePostersEnabled)
+                  })
+                : ""
+            }
+            ${
+              isModernLayout
+                ? this.renderToggleRow({
+                    focusKey: "layout:alwaysShowLandscapeClearlogo",
+                    title: t("layout_always_show_landscape_clearlogo", {}, "Always Backdrop with Logo for Landscape Posters"),
+                    subtitle: t(
+                      "layout_always_show_landscape_clearlogo_sub",
+                      {},
+                      "Ignore landscape poster from addon and use backdrop with clearlogo overlay instead."
+                    ),
+                    checked: Boolean(model.layout.alwaysShowLandscapeClearlogo)
                   })
                 : ""
             }
@@ -77,8 +99,8 @@ export function renderLayoutMarkup(model) {
                 !isModernLayout && model.layout.heroSectionEnabled
                   ? this.renderActionRow({
                       focusKey: "layout:heroCatalogs",
-                      title: t("layout_hero_catalog", {}, "Hero catalogs"),
-                      subtitle: t("layout_hero_catalog_sub", {}, "Choose catalogs used by the Hero section."),
+                      title: t("layout_hero_catalogs", {}, "Hero Catalogs"),
+                      subtitle: t("layout_hero_catalogs_sub", {}, "Select one or more catalogs for hero content."),
                       value: String(model.layout.heroCatalogKeys?.length || 0)
                     })
                   : ""
@@ -114,13 +136,29 @@ export function renderLayoutMarkup(model) {
                   })
                 : ""
             }
+            ${
+              !isModernLayout
+                ? `
             ${this.renderToggleRow({
               focusKey: "layout:heroSection",
               title: t("settings.layout.heroSection.title"),
               subtitle: t("settings.layout.heroSection.subtitle"),
               checked: Boolean(model.layout.heroSectionEnabled)
             })}
-            ${model.layout.heroSectionEnabled ? this.renderActionRow({ focusKey: "layout:heroCatalogs", title: t("layout_hero_catalog", {}, "Hero catalogs"), subtitle: t("layout_hero_catalog_sub", {}, "Choose catalogs used by the Hero section"), value: model.layout.heroCatalogKeys?.length ? String(model.layout.heroCatalogKeys.length) : t("common_all", {}, "All") }) : ""}
+            ${model.layout.heroSectionEnabled ? this.renderActionRow({ focusKey: "layout:heroCatalogs", title: t("layout_hero_catalogs", {}, "Hero Catalogs"), subtitle: t("layout_hero_catalogs_sub", {}, "Select one or more catalogs for hero content."), value: model.layout.heroCatalogKeys?.length ? String(model.layout.heroCatalogKeys.length) : t("common_all", {}, "All") }) : ""}
+            `
+                : ""
+            }
+            ${this.renderToggleRow({
+              focusKey: "layout:heroDescriptionAutoScroll",
+              title: t("layout_hero_description_auto_scroll", {}, "Auto-scroll Descriptions"),
+              subtitle: t(
+                "layout_hero_description_auto_scroll_sub",
+                {},
+                "Slowly scroll long descriptions on the Home screen instead of cutting them off."
+              ),
+              checked: Boolean(model.layout.heroDescriptionAutoScrollEnabled)
+            })}
             ${this.renderActionRow({
               focusKey: "layout:searchDiscover",
               title: t("layout_discover_location_action", {}, "Discover location"),
@@ -221,6 +259,12 @@ export function renderLayoutMarkup(model) {
               checked: model.layout.showUnairedNextUp !== false
             })}
             ${this.renderActionRow({
+              focusKey: "layout:continueWatchingClickAction",
+              title: t("layout_cw_click_action", {}, "On Select"),
+              subtitle: t("layout_cw_click_action_sub", {}, "What opens when you select a Continue Watching item"),
+              value: continueWatchingClickLabel
+            })}
+            ${this.renderActionRow({
               focusKey: "layout:continueWatchingSortMode",
               title: t("settings.layout.continueWatchingSort.title", {}, "Sort Order"),
               subtitle: t(
@@ -247,6 +291,7 @@ export function renderLayoutMarkup(model) {
 
   const detailPageBody = `
           <div class="settings-stack">
+            ${this.renderToggleRow({ focusKey: "layout:detail:shuffle", title: t("random_episode_title"), subtitle: t("layout_random_episode_sub"), checked: Boolean(model.layout.randomEpisodeEnabled) })}
             ${this.renderToggleRow({
               focusKey: "layout:detail:blurUnwatched",
               title: t("settings.layout.blurUnwatched.title"),
@@ -264,6 +309,16 @@ export function renderLayoutMarkup(model) {
               title: t("settings.layout.showTrailerButton.title"),
               subtitle: t("settings.layout.showTrailerButton.subtitle"),
               checked: Boolean(model.layout.detailPageTrailerButtonEnabled)
+            })}
+            ${this.renderToggleRow({
+              focusKey: "layout:detail:trailerBackground",
+              title: t("layout_trailer_play_in_background", {}, "Play in Background"),
+              subtitle: t(
+                "layout_trailer_play_in_background_sub",
+                {},
+                "Play the trailer in place of the backdrop while the page stays visible."
+              ),
+              checked: model.layout.trailerPlayInBackground === true
             })}
             ${this.renderToggleRow({
               focusKey: "layout:detail:preferExternalMeta",
@@ -410,6 +465,13 @@ export function renderLayoutMarkup(model) {
                 bodyHtml: focusedPosterBody
               })}
               ${this.renderCollapsibleRow({ focusKey: "layout:toggle:cardAppearance", title: t("settings_card_depth_title", {}, "Card appearance"), subtitle: t("settings_card_depth_description", {}, "Size, corners and depth surfaces"), expanded: Boolean(expanded.cardAppearance), bodyHtml: cardAppearanceBody })}
+              ${this.renderCollapsibleRow({
+                focusKey: "layout:toggle:customPosters",
+                title: t("layout_custom_poster_title", {}, "Custom Poster Source"),
+                subtitle: t("layout_section_custom_poster_desc", {}, "Use artwork from an external poster service."),
+                expanded: Boolean(expanded.customPosters),
+                bodyHtml: `<div class="settings-stack">${renderCustomPosterSettings.call(this)}</div>`
+              })}
             </div>
           </div>
         `;
