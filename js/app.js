@@ -25,7 +25,6 @@ import { ProviderCredentialSyncService } from "./core/profile/providerCredential
 import { ThemeManager } from "./ui/theme/themeManager.js";
 import { renderAppShell } from "./bootstrap/renderAppShell.js";
 import { renderAddonRemotePage } from "./bootstrap/renderAddonRemotePage.js";
-import { preloadStreamBadgeImages } from "./ui/screens/stream/streamScreen.js";
 import { warmStreamingLibs } from "./runtime/loadStreamingLibs.js";
 import { runAfterFirstHomePaint } from "./runtime/startupScheduler.js";
 import { Platform } from "./platform/index.js";
@@ -303,8 +302,17 @@ function watchTvFramePace() {
   if (!profile.isTvRuntime || profile.isPerformanceConstrained) {
     return;
   }
+  let onKeyDown = null;
+  const detachListener = () => {
+    if (onKeyDown) {
+      document.removeEventListener("keydown", onKeyDown, true);
+      onKeyDown = null;
+    }
+  };
   const monitor = createFramePaceMonitor({
+    shouldSample: () => Router.getCurrent() !== "player",
     onSlow: (lostMs) => {
+      detachListener();
       storeMeasuredTvTier({ tier: "constrained", appVersion: APP_VERSION, lostMs });
       resetTvRuntimePerformanceProfile();
       applyPerformanceMode();
@@ -313,7 +321,13 @@ function watchTvFramePace() {
   });
   // Readable from the remote inspector when a set's tier is in question.
   globalThis.__NUVIO_FRAME_PACE__ = monitor;
-  document.addEventListener("keydown", () => monitor.noteKey(), true);
+  onKeyDown = () => {
+    if (Router.getCurrent() === "player") {
+      return;
+    }
+    monitor.noteKey();
+  };
+  document.addEventListener("keydown", onKeyDown, true);
 }
 
 function isAddonRemoteMode() {
@@ -423,15 +437,12 @@ async function enterWithLastProfile({ restoreWebOsRoute = false } = {}) {
     const memberAccess = MemberAccessRepository.getCachedAccess();
     ThemeManager.apply({ enforceAccess: true, access: memberAccess });
     I18n.apply();
-    // Neither the member access refresh nor the badge prerender is needed for
-    // the first Home paint; on a single-core TV they competed with the catalog
-    // rows for the main thread and the network.
+    // Member access refresh is not needed for the first Home paint; on a
+    // single-core TV it competed with the catalog rows for the main thread and
+    // the network.
     runAfterFirstHomePaint(() => {
       void MemberAccessRepository.getAccess().catch((error) => {
         console.warn("Profile member access refresh failed", error);
-      });
-      void preloadStreamBadgeImages().catch((error) => {
-        console.warn("Stream badge image prerender failed", error);
       });
     });
   }
@@ -825,6 +836,7 @@ async function bootstrapApp() {
       ProviderCredentialSyncService.cancelForegroundPull();
       void MediaServerSyncService.stop();
       ProfileSyncService.clearCachedProfileLockStates();
+      Router.routes?.home?.resetForSignOut?.();
       hasSelectedProfileThisSession = false;
       const shouldBypassQr = Boolean(LocalStore.get(GUEST_QR_BYPASS_KEY, false));
       if (isSignedOutRouteAllowed()) {

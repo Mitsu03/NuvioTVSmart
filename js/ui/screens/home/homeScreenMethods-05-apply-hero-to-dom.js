@@ -10,7 +10,6 @@ export function createHomeScreenMethods05() {
     setLegacySidebarExpanded,
     HOME_LEGACY_HERO_BACKDROP_CROSSFADE_MS,
     HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS,
-    escapeAttribute,
     escapeHtml,
     animateHeroBackdropSwap,
     animateHeroLogoSwap,
@@ -52,7 +51,8 @@ export function createHomeScreenMethods05() {
       if (backdrop) {
         const src = display.backdrop || "";
         if (backdrop instanceof HTMLImageElement) {
-          const shouldFreezeBackdrop = Boolean(hero?.heroMetaEnriching) && String(backdrop.getAttribute("src") || "").trim();
+          const shouldFreezeBackdrop =
+            Boolean(hero?.heroMetaEnriching) && String(backdrop.heroBackdropCanvasSrc || backdrop.getAttribute("src") || "").trim();
           if (!shouldFreezeBackdrop) {
             animateHeroBackdropSwap(backdrop, src, display.title || "featured", heroCrossfadeMs, {
               transitionMode: heroTransitionMode
@@ -61,9 +61,22 @@ export function createHomeScreenMethods05() {
             backdrop.setAttribute("alt", "");
           }
         } else if (src) {
-          backdrop.setAttribute("src", src);
-          backdrop.setAttribute("alt", "");
-          backdrop.classList.remove("placeholder");
+          if (typeof document?.createElement === "function" && backdrop.parentNode) {
+            const img = document.createElement("img");
+            img.className = "home-hero-backdrop";
+            img.setAttribute("alt", "");
+            img.setAttribute("decoding", "async");
+            img.setAttribute("fetchpriority", "high");
+            backdrop.parentNode.replaceChild(img, backdrop);
+            registerHomeDomNodes([img]);
+            animateHeroBackdropSwap(img, src, display.title || "featured", heroCrossfadeMs, {
+              transitionMode: heroTransitionMode
+            });
+          } else {
+            backdrop.setAttribute("src", src);
+            backdrop.setAttribute("alt", "");
+            backdrop.classList.remove("placeholder");
+          }
         } else {
           backdrop.removeAttribute("src");
           backdrop.classList.add("placeholder");
@@ -78,17 +91,17 @@ export function createHomeScreenMethods05() {
             transitionMode: heroTransitionMode
           });
         } else if (brandNode) {
-          brandNode.insertAdjacentHTML(
-            "afterbegin",
-            `<img class="home-hero-logo home-hero-logo-transition-enter" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title || "logo")}" decoding="async" fetchpriority="high" />`
-          );
-          const insertedLogo = brandNode.querySelector(".home-hero-logo");
+          const insertedLogo = document.createElement("img");
+          insertedLogo.className = "home-hero-logo";
+          insertedLogo.alt = display.title || "logo";
+          insertedLogo.decoding = "async";
+          insertedLogo.fetchPriority = "high";
+          brandNode.insertBefore(insertedLogo, brandNode.firstChild);
           // The logo belongs to the rendered hero, unlike temporary transition
           // ghosts. Let incremental refreshes reuse or remove it.
           registerHomeDomNodes([insertedLogo]);
-          requestAnimationFrame(() => {
-            insertedLogo?.classList?.add("is-visible");
-            setTimeout(() => insertedLogo?.classList?.remove("home-hero-logo-transition-enter", "is-visible"), heroCrossfadeMs);
+          animateHeroLogoSwap(insertedLogo, display.logo, display.title || "logo", heroCrossfadeMs, {
+            transitionMode: heroTransitionMode
           });
         }
       } else if (logoNode) {
@@ -170,8 +183,12 @@ export function createHomeScreenMethods05() {
       this.applyHeroDescriptionAutoScroll();
     },
     applyHeroDescriptionAutoScroll() {
+      if (this.heroDescriptionAutoScrollFrame) {
+        cancelAnimationFrame(this.heroDescriptionAutoScrollFrame);
+        this.heroDescriptionAutoScrollFrame = 0;
+      }
       const node = this.container?.querySelector(".home-hero-card .home-hero-description");
-      if (!node) {
+      if (!node || !this.layoutPrefs?.heroDescriptionAutoScrollEnabled) {
         this.heroDescriptionAutoScroller?.stop();
         return;
       }
@@ -183,7 +200,15 @@ export function createHomeScreenMethods05() {
           }
         });
       }
-      this.heroDescriptionAutoScroller.apply(node, Boolean(this.layoutPrefs?.heroDescriptionAutoScrollEnabled));
+      // Measuring here would force a synchronous layout inside the hero update.
+      // Android sizes AutoScrollingText during composition, at frame time.
+      this.heroDescriptionAutoScrollFrame = requestAnimationFrame(() => {
+        this.heroDescriptionAutoScrollFrame = 0;
+        if (!node.isConnected) {
+          return;
+        }
+        this.heroDescriptionAutoScroller.apply(node, Boolean(this.layoutPrefs?.heroDescriptionAutoScrollEnabled));
+      });
     },
     setSidebarExpanded(expanded) {
       const nextExpanded = Boolean(expanded);
@@ -294,11 +319,17 @@ export function createHomeScreenMethods05() {
         return this.currentFocusedNode;
       }
       const focused = this.container?.querySelector(".focusable.focused") || null;
-      this.currentFocusedNode = focused;
+      this.setCurrentFocusedNode(focused);
       return focused;
     },
     setCurrentFocusedNode(node = null) {
-      this.currentFocusedNode = node instanceof HTMLElement ? node : null;
+      const next = node instanceof HTMLElement ? node : null;
+      if (this.activeCollectionFocusGifNode && this.activeCollectionFocusGifNode !== next) {
+        // Android renders the overlay from `isFocused`; every focus move has to
+        // drop the previous card's animated overlay, whatever moved the focus.
+        this.hydrateCollectionFocusGif(this.activeCollectionFocusGifNode, false);
+      }
+      this.currentFocusedNode = next;
     },
     setFocusedNode(target, { suppressDelegatedFocus = false } = {}) {
       if (this.homeHoldFocusLocked) {

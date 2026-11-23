@@ -4,7 +4,7 @@ import { shouldContinueTrailerInBackgroundOnBack } from "../../../core/detail/tr
 import { focusWithoutScroll } from "../../navigation/focusWithoutScroll.js";
 
 export function createMetaDetailsScreenMethods19() {
-  const { t, escapeHtml, buildInlineYoutubePlayerUrl, LayoutPreferences, PlayerSettingsStore } = internals;
+  const { Router, t, escapeHtml, buildInlineYoutubePlayerUrl, LayoutPreferences, PlayerSettingsStore } = internals;
 
   return {
     toggleActiveTrailerPlayback() {
@@ -215,7 +215,7 @@ export function createMetaDetailsScreenMethods19() {
           this.trailerSource.embedUrl ||
           "";
         layer.innerHTML = `
-            <div class="detail-trailer-media detail-trailer-youtube" data-trailer-media>
+            <div class="detail-trailer-media detail-trailer-youtube" data-trailer-media inert>
               <iframe
                 class="detail-trailer-frame"
                 src="${youtubeFrameUrl}"
@@ -226,6 +226,7 @@ export function createMetaDetailsScreenMethods19() {
                 scrolling="no"
                 tabindex="-1"
                 aria-hidden="true"
+                inert
               ></iframe>
             </div>
             ${controlsMarkup}
@@ -261,12 +262,16 @@ export function createMetaDetailsScreenMethods19() {
       }
     },
     async playTrailer({ muted = null, restart = false, initiatedByUser = true, preserveSource = false } = {}) {
+      const token = this.detailLoadToken;
       const requestedFocusRestore = initiatedByUser ? this.captureDetailFocus() : null;
       // Android TV resolves TMDB first and only then falls back to the catalog
       // trailer. Re-check here as well so a fast user action cannot use the
       // addon trailer while the background resolution is still in flight.
       if (!preserveSource) {
         const preferredSource = await this.resolvePreferredTrailerSource(this.meta);
+        if (token !== this.detailLoadToken || !this.container || (Router?.getCurrent && Router.getCurrent() !== "detail")) {
+          return;
+        }
         if (preferredSource) {
           this.trailerSource = preferredSource;
         }

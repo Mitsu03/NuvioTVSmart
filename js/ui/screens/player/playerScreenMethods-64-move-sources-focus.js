@@ -75,6 +75,16 @@ export function createPlayerScreenMethods64() {
       }
 
       if (zone === "list") {
+        if (direction === "left" || direction === "right") {
+          // Android: Left/Right in the source list switch to the previous/next addon filter.
+          const current = filters.indexOf(this.sourceFilter);
+          const next = filters[current + (direction === "right" ? 1 : -1)];
+          if (current >= 0 && next) {
+            this.setSourceFilter(next);
+            this.renderSourcesPanel();
+          }
+          return;
+        }
         if (direction === "up") {
           if (index > 0) {
             this.sourcesFocus = { zone: "list", index: index - 1 };
@@ -230,10 +240,20 @@ export function createPlayerScreenMethods64() {
       return avplayWidth > 0 && avplayHeight > 0 ? avplayWidth / avplayHeight : null;
     },
     applyAspectMode({ showToast = false } = {}) {
+      // The post-play window owns the playback surface, including its AVPlay
+      // display rect, until it returns to the player. Lifecycle refreshes
+      // (canplay after a seek, track changes) must not restore full screen
+      // behind the overlay.
+      if (this.isPostPlayVisible?.()) {
+        return;
+      }
       const mode = this.getAspectModeDefinition();
       const video = PlayerController.video;
       if (video) {
         const rect = this.calculateAspectRect(mode.id, video);
+        // The post-play mini window keeps the same aspect handling as the
+        // full-screen player, like Android's player surface modifier.
+        this.aspectDisplayMethod = rect.displayMethod;
         const usingTizenAvPlay = Boolean(Environment.isTizen() && PlayerController.isUsingAvPlay?.());
         const usingTizenHtmlVideo = Environment.isTizen() && !usingTizenAvPlay;
         // Keep the video element on the player viewport wherever native text
