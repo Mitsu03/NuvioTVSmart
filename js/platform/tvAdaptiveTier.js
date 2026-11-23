@@ -69,7 +69,8 @@ export function createFramePaceMonitor({
   onSlow,
   policy = TV_FRAME_PACE_POLICY,
   now = () => globalThis.performance.now(),
-  requestFrame = (callback) => globalThis.requestAnimationFrame(callback)
+  requestFrame = (callback) => globalThis.requestAnimationFrame(callback),
+  shouldSample = null
 } = {}) {
   const startedAt = now();
   const samples = [];
@@ -84,6 +85,9 @@ export function createFramePaceMonitor({
       if (reported || sampling || now() - startedAt < policy.warmupMs) {
         return;
       }
+      if (typeof shouldSample === "function" && !shouldSample()) {
+        return;
+      }
       sampling = true;
       const keyAt = now();
       let lastFrameAt = keyAt;
@@ -92,6 +96,10 @@ export function createFramePaceMonitor({
         const frameAt = now();
         const interval = frameAt - lastFrameAt;
         lastFrameAt = frameAt;
+        if (globalThis.document?.hidden || interval > 1000) {
+          sampling = false;
+          return;
+        }
         if (interval > policy.lateFrameMs) {
           lostMs += interval - policy.frameMs;
         }
@@ -100,6 +108,9 @@ export function createFramePaceMonitor({
           return;
         }
         sampling = false;
+        if (typeof shouldSample === "function" && !shouldSample()) {
+          return;
+        }
         samples.push(lostMs);
         if (samples.length > policy.sampleKeys) {
           samples.shift();

@@ -163,6 +163,7 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <title>${appName}</title>
+  <script src="assets/runtime/webos-timezone-shim.js"></script>
   <script src="assets/runtime/legacy-features.js"></script>
   <link rel="stylesheet" href="css/bundle.css" />
 </head>
@@ -172,7 +173,6 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   <script>window.__NUVIO_PLATFORM__ = "webos";</script>
   <script>window.__NUVIO_WEBOS_PLUGIN_SERVICE_ENABLED__ = true; window.__NUVIO_WEBOS_PLUGIN_SERVICE_ID__ = "${webOsPluginServiceId}";</script>
   <script src="nuvio.env.js"></script>
-  <script src="assets/libs/qrcode-generator.js"></script>
 ${webOsScriptTag}  <script>
     window.NuvioBootGuard.runCompatibilityGate(${compatibilityOptions}, function startNuvioApp() {
       window.NuvioBootGuard.loadScript("app.bundle.js");

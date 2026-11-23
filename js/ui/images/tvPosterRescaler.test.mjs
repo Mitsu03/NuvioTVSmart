@@ -1,14 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 
 import {
+  WORKER_SOURCE,
   artworkResizeTarget,
   artworkWorkerCount,
   computeSourceRect,
   isArtworkTooLarge,
   isJpegHeader,
   isRescalableArtworkFit,
-  jpegDimensions
+  jpegDimensions,
+  pngStillDimensions,
+  rescaleArtwork,
+  rescaleHomeArtwork,
+  shouldQueueRescale,
+  webpArtworkInfo
 } from "./tvPosterRescaler.js";
 import { getTvArtworkPixelRatio } from "../../platform/tvRuntimePerformance.js";
 
@@ -141,6 +148,98 @@ test("only JPEG bytes are accepted for re-encoding", () => {
   assert.equal(isJpegHeader(null), false);
 });
 
+const asciiBytes = (text) => [...text].map((char) => char.charCodeAt(0));
+
+function webpFile(chunk, payload) {
+  const riffSize = 4 + 8 + payload.length + (payload.length & 1);
+  return new Uint8Array([
+    ...asciiBytes("RIFF"),
+    riffSize & 0xff,
+    (riffSize >>> 8) & 0xff,
+    (riffSize >>> 16) & 0xff,
+    (riffSize >>> 24) & 0xff,
+    ...asciiBytes("WEBP"),
+    ...asciiBytes(chunk),
+    payload.length & 0xff,
+    (payload.length >>> 8) & 0xff,
+    (payload.length >>> 16) & 0xff,
+    (payload.length >>> 24) & 0xff,
+    ...payload
+  ]);
+}
+
+function vp8Payload(width, height) {
+  // Frame tag, start code, then the two 14-bit sizes.
+  return [0, 0, 0, 0x9d, 0x01, 0x2a, width & 0xff, width >>> 8, height & 0xff, height >>> 8];
+}
+
+function vp8lPayload(width, height, alpha) {
+  const bits = ((width - 1) & 0x3fff) | (((height - 1) & 0x3fff) << 14) | ((alpha ? 1 : 0) << 28);
+  return [0x2f, bits & 0xff, (bits >>> 8) & 0xff, (bits >>> 16) & 0xff, (bits >>> 24) & 0xff];
+}
+
+function vp8xPayload(width, height, { alpha = false, animated = false } = {}) {
+  const flags = (alpha ? 0x10 : 0) | (animated ? 0x02 : 0);
+  return [
+    flags,
+    0,
+    0,
+    0,
+    (width - 1) & 0xff,
+    ((width - 1) >>> 8) & 0xff,
+    ((width - 1) >>> 16) & 0xff,
+    (height - 1) & 0xff,
+    ((height - 1) >>> 8) & 0xff,
+    ((height - 1) >>> 16) & 0xff
+  ];
+}
+
+test("a still WebP header gives the size and alpha the rescaler needs", () => {
+  assert.deepEqual(webpArtworkInfo(webpFile("VP8 ", vp8Payload(1536, 864))), {
+    animated: false,
+    alpha: false,
+    width: 1536,
+    height: 864
+  });
+  assert.deepEqual(webpArtworkInfo(webpFile("VP8L", vp8lPayload(411, 233, true))), {
+    animated: false,
+    alpha: true,
+    width: 411,
+    height: 233
+  });
+  assert.deepEqual(webpArtworkInfo(webpFile("VP8X", vp8xPayload(220, 338))), {
+    animated: false,
+    alpha: false,
+    width: 220,
+    height: 338
+  });
+  assert.equal(
+    webpArtworkInfo(webpFile("VP8X", vp8xPayload(411, 233, { alpha: true }))).alpha,
+    true
+  );
+});
+
+test("an animated WebP is refused before the canvas can drop its frames", () => {
+  assert.deepEqual(webpArtworkInfo(webpFile("VP8X", vp8xPayload(1536, 864, { animated: true }))), {
+    animated: true
+  });
+});
+
+test("a malformed or non-WebP header is left to the img tag", () => {
+  assert.equal(webpArtworkInfo(null), null);
+  assert.equal(webpArtworkInfo(new Uint8Array([0x52, 0x49, 0x46, 0x46])), null);
+  assert.equal(
+    webpArtworkInfo(
+      new Uint8Array([...asciiBytes("RIFF"), 0, 0, 0, 0, ...asciiBytes("WAVE"), 0, 0, 0, 0])
+    ),
+    null
+  );
+  assert.equal(webpArtworkInfo(webpFile("XXXX", [0, 0, 0, 0])), null);
+  const badStartCode = vp8Payload(100, 100);
+  badStartCode[3] = 0;
+  assert.equal(webpArtworkInfo(webpFile("VP8 ", badStartCode)), null);
+});
+
 test("a source above the native 8 MiB body cap is refused", () => {
   assert.equal(isArtworkTooLarge({ byteLength: 8388608 }), false);
   assert.equal(isArtworkTooLarge({ byteLength: 8388609 }), true);
@@ -195,6 +294,41 @@ test("a bounded source size is read from the JPEG header", () => {
   assert.equal(jpegDimensions(new Uint8Array([0x89, 0x50, 0x4e, 0x47])), null);
 });
 
+function pngWithDimensions(width, height, { apng = false } = {}) {
+  const chunk = (type, data) => {
+    const head = new Uint8Array(8);
+    new DataView(head.buffer).setUint32(0, data.length);
+    for (let index = 0; index < 4; index += 1) head[4 + index] = type.charCodeAt(index);
+    return [...head, ...data, 0, 0, 0, 0];
+  };
+  const ihdr = new Uint8Array(13);
+  const view = new DataView(ihdr.buffer);
+  view.setUint32(0, width);
+  view.setUint32(4, height);
+  return new Uint8Array([
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
+    ...chunk("IHDR", ihdr),
+    ...(apng ? chunk("acTL", new Uint8Array(8)) : []),
+    ...chunk("IDAT", new Uint8Array(4)),
+    ...chunk("IEND", [])
+  ]);
+}
+
+test("a bounded source size is read from the PNG header, animation refused", () => {
+  assert.deepEqual(pngStillDimensions(pngWithDimensions(1664, 437)), { width: 1664, height: 437 });
+  assert.equal(pngStillDimensions(pngWithDimensions(1664, 437, { apng: true })), null);
+  assert.equal(pngStillDimensions(null), null);
+  assert.equal(pngStillDimensions(new Uint8Array([0x89, 0x50, 0x4e, 0x47])), null);
+  assert.equal(pngStillDimensions(new Uint8Array(24)), null);
+});
+
 test("only an oversized JPEG asks for a clamped decode", () => {
   assert.deepEqual(artworkResizeTarget(1920, 1080), { width: 1280 });
   assert.deepEqual(artworkResizeTarget(1000, 1500), { height: 1280 });
@@ -202,4 +336,200 @@ test("only an oversized JPEG asks for a clamped decode", () => {
   assert.equal(artworkResizeTarget(1280, 720), null);
   assert.equal(artworkResizeTarget(640, 480), null);
   assert.equal(artworkResizeTarget(0, 0), null);
+});
+
+test("shouldQueueRescale fast-skips obvious non-rescalable URLs and non-JPEG data URIs", () => {
+  const box = { width: 220, height: 338, fit: "cover" };
+  for (const url of [
+    "https://cdn.example.com/posters/collection.gif",
+    "https://cdn.example.com/posters/collection.gifv?autoplay=1",
+    "https://cdn.example.com/posters/logo.png?size=large",
+    "https://cdn.example.com/posters/mark.svg#icon",
+    "https://cdn.example.com/posters/hero.avif?q=85",
+    "assets/images/local.png",
+    "data:image/png;base64,iVBORw0KGgo=",
+    "data:image/gif;base64,R0lGODlhAQAB",
+    "data:image/webp;base64,UklGRh4AAABXRUJQ",
+    "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E",
+    "data:image/avif;base64,AAAA"
+  ]) {
+    assert.equal(shouldQueueRescale(url, box), false, `${url} should skip worker queue`);
+  }
+
+  for (const url of [
+    "https://image.tmdb.org/t/p/w500/poster.jpg",
+    "https://image.tmdb.org/t/p/w500/poster.JPEG?lang=en#hero",
+    "https://cdn.example.com/poster.jpg?fallback=placeholder.png",
+    "https://cdn.example.com/posters/collection.webp?w=600#card",
+    "https://cdn.example.com/posters/collection.WEBP",
+    "https://images.metahub.space/poster/medium/tt1234567/img",
+    "https://cdn.example.com/artwork?id=42",
+    "data:image/jpeg;base64,/9j/4AAQ",
+    "data:image/jpg;base64,/9j/4AAQ"
+  ]) {
+    assert.equal(
+      shouldQueueRescale(url, box),
+      true,
+      `${url} should remain eligible for worker JPEG check`
+    );
+  }
+});
+
+test("rescaleHomeArtwork and rescaleArtwork resolve null without starting workers for skipped URLs", async () => {
+  const box = { width: 220, height: 338, fit: "cover" };
+  const originalWorker = globalThis.Worker;
+  let workerSpawns = 0;
+  globalThis.Worker = class RejectingWorker {
+    constructor() {
+      workerSpawns += 1;
+    }
+  };
+  try {
+    for (const url of [
+      "https://cdn.example.com/focused/action.gif#loop",
+      "https://cdn.example.com/focused/action.png",
+      "data:image/webp;base64,UklGRh4AAABXRUJQ"
+    ]) {
+      assert.equal(await rescaleHomeArtwork(url, box), null);
+      assert.equal(await rescaleArtwork(url, box), null);
+    }
+    assert.equal(workerSpawns, 0, "obvious non-JPEG URLs must not instantiate workers");
+  } finally {
+    if (originalWorker === undefined) {
+      delete globalThis.Worker;
+    } else {
+      globalThis.Worker = originalWorker;
+    }
+  }
+});
+
+// The worker source is generated from the helpers above and normally only runs
+// inside a real Worker. Exercising it in a VM keeps the network early-abort
+// honest without spawning one.
+function createPosterWorker(response) {
+  const messages = [];
+  const context = vm.createContext({
+    self: { postMessage: (message) => messages.push(message) },
+    fetch: async () => response,
+    Blob: class Blob {
+      constructor(parts) {
+        this.parts = parts;
+      }
+    },
+    createImageBitmap: async () => ({ width: 100, height: 100, close() {} }),
+    OffscreenCanvas: class OffscreenCanvas {
+      getContext() {
+        return { drawImage() {} };
+      }
+      async convertToBlob() {
+        return { type: "image/jpeg" };
+      }
+    },
+    setTimeout,
+    clearTimeout
+  });
+  vm.runInContext(WORKER_SOURCE, context);
+  return { context, messages };
+}
+
+function streamResponse(chunks, tracker) {
+  let index = 0;
+  return {
+    ok: true,
+    headers: { get: () => null },
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (index >= chunks.length) return { done: true };
+          const value = chunks[index];
+          index += 1;
+          tracker.reads += 1;
+          return { done: false, value };
+        },
+        cancel: async () => {
+          tracker.cancelled = true;
+        }
+      })
+    },
+    arrayBuffer: async () => {
+      throw new Error("a streamed response must not be buffered");
+    }
+  };
+}
+
+async function runPosterJob(response) {
+  const { context, messages } = createPosterWorker(response);
+  await context.self.onmessage({
+    data: { id: 1, url: "https://cdn.example.com/art.webp", width: 220, height: 338, fit: "cover" }
+  });
+  assert.equal(messages.length, 1);
+  return messages[0];
+}
+
+test("the worker cancels an animated WebP once the 30-byte header arrives", async () => {
+  const bytes = new Uint8Array(40);
+  // RIFF, size, WEBP, then a VP8X chunk whose animation flag is set.
+  bytes.set([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58]);
+  bytes[20] = 0x02;
+  const tail = new Uint8Array(4 * 1024 * 1024);
+  const tracker = { reads: 0, cancelled: false };
+  const message = await runPosterJob(
+    streamResponse([bytes.slice(0, 16), bytes.slice(16), tail], tracker)
+  );
+
+  assert.equal(message.reason, "animated webp");
+  assert.equal(tracker.reads, 2, "the multi-MB tail is never pulled");
+  assert.equal(tracker.cancelled, true);
+});
+
+test("the worker cancels a non-JPEG body after the leading header", async () => {
+  const tracker = { reads: 0, cancelled: false };
+  const message = await runPosterJob(
+    streamResponse([new Uint8Array(32), new Uint8Array(4 * 1024 * 1024)], tracker)
+  );
+
+  assert.equal(message.reason, "not jpeg");
+  assert.equal(tracker.reads, 1);
+  assert.equal(tracker.cancelled, true);
+});
+
+test("the worker stops a streamed body that grows past 8 MiB", async () => {
+  const first = new Uint8Array(5 * 1024 * 1024);
+  first.set([0xff, 0xd8, 0xff]);
+  const tracker = { reads: 0, cancelled: false };
+  const message = await runPosterJob(
+    streamResponse([first, new Uint8Array(4 * 1024 * 1024)], tracker)
+  );
+
+  assert.equal(message.reason, "too large");
+  assert.equal(tracker.cancelled, true);
+});
+
+test("the worker reads a JPEG body to the end without cancelling", async () => {
+  const jpeg = new Uint8Array(100);
+  jpeg.set([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02]);
+  const tracker = { reads: 0, cancelled: false };
+  const message = await runPosterJob(streamResponse([jpeg], tracker));
+
+  assert.equal(message.reason, "already small");
+  assert.equal(tracker.reads, 1);
+  assert.equal(tracker.cancelled, false);
+});
+
+test("the worker keeps the arrayBuffer path when the body has no reader", async () => {
+  const jpeg = new Uint8Array(100);
+  jpeg.set([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02]);
+  let buffered = false;
+  const message = await runPosterJob({
+    ok: true,
+    headers: { get: () => null },
+    body: null,
+    arrayBuffer: async () => {
+      buffered = true;
+      return jpeg.buffer;
+    }
+  });
+
+  assert.equal(message.reason, "already small");
+  assert.equal(buffered, true);
 });

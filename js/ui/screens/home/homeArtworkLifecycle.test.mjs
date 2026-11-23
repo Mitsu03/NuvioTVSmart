@@ -84,13 +84,13 @@ function makeRow(context, { top }) {
   return row;
 }
 
-function makeImage(context, { row, src, left = 0 }) {
+function makeImage(context, { row, src, left = 0, className = "content-poster" }) {
   const image = new context.HTMLImageElement();
   const attributes = new Map();
   image.isConnected = true;
   image.dataset = { src };
   image.loading = "";
-  image.classList = { contains: (name) => name === "content-poster" };
+  image.classList = { contains: (name) => name === className };
   image.closest = (selector) => (selector === ROW_SELECTOR ? row : null);
   image.getBoundingClientRect = () => ({
     top: row.top,
@@ -367,4 +367,107 @@ test("the stylesheet's own object-fit reaches the rescaler", () => {
   );
   assert.equal(asked[0].width, 220);
   assert.equal(asked[0].height, 338);
+});
+
+test("continue watching card backdrops rescale and release on eviction", async () => {
+  const asked = [];
+  const released = [];
+  const context = buildHome({
+    rescale: {
+      enabled: () => true,
+      fit: () => "cover",
+      rescale: (url, options) => {
+        asked.push({ url, ...options });
+        return Promise.resolve("blob:cw-rescaled-1");
+      },
+      release: (url) => released.push(url)
+    }
+  });
+  const row = makeRow(context, { top: 100 });
+  const cwImage = makeImage(context, {
+    row,
+    src: "https://art/cw-backdrop.jpg",
+    className: "home-continue-bg"
+  });
+  const screen = makeScreen(context, { rows: [row], images: [cwImage] });
+
+  screen.hydrateHomeLazyImages(null, { forceFullScan: true, refreshIndex: true });
+  await Promise.resolve();
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].url, "https://art/cw-backdrop.jpg");
+  assert.equal(cwImage.src, "blob:cw-rescaled-1");
+  assert.equal(cwImage.dataset.originalSrc, "https://art/cw-backdrop.jpg");
+
+  row.top = 9000;
+  assert.equal(screen.evictDistantHomeLazyImages(null), 1);
+  assert.deepEqual(released, ["blob:cw-rescaled-1"]);
+  assert.equal(cwImage.dataset.src, "https://art/cw-backdrop.jpg");
+  assert.equal(cwImage.getAttribute("src"), null);
+});
+
+test("TV continue watching cards defer their backdrop to the artwork pass", async () => {
+  const previousPlatform = globalThis.__NUVIO_PLATFORM__;
+  const { Platform } = await import("../../../platform/index.js");
+  globalThis.__NUVIO_PLATFORM__ = "tizen";
+  Platform.current = null;
+  try {
+    const { renderContinueWatchingCard } =
+      await import("./homeScreenHelpers-12-build-hero-indicators.js");
+    const card = renderContinueWatchingCard(
+      { contentId: "tt1", contentType: "series", title: "Show", poster: "https://art/poster.jpg" },
+      0,
+      { rowKey: "continue_watching", navIndex: 0, posterSettings: {} }
+    );
+    assert.match(card, /class="home-continue-bg"[^>]*data-src="https:\/\/art\/poster\.jpg"/);
+    assert.doesNotMatch(card, /class="home-continue-bg"[^>]* src=/);
+  } finally {
+    globalThis.__NUVIO_PLATFORM__ = previousPlatform;
+    Platform.current = null;
+  }
+});
+
+test("lazy hydration completes all rescaler geometry reads before mutating image loading attributes", () => {
+  const events = [];
+  const context = buildHome({
+    tv: true,
+    rescale: {
+      enabled: () => true,
+      fit: () => {
+        events.push("read:fit");
+        return "cover";
+      },
+      rescale: () => Promise.resolve(null)
+    }
+  });
+  const row = makeRow(context, { top: 100 });
+  const images = [
+    makeImage(context, { row, src: "https://art/one.jpg", left: 0 }),
+    makeImage(context, { row, src: "https://art/two.jpg", left: 260 })
+  ];
+  images.forEach((image) => {
+    const origRect = image.getBoundingClientRect;
+    image.getBoundingClientRect = () => {
+      events.push("read:rect");
+      return origRect();
+    };
+    const origRemove = image.removeAttribute;
+    image.removeAttribute = (name) => {
+      events.push(`write:removeAttribute:${name}`);
+      origRemove(name);
+    };
+  });
+
+  const screen = makeScreen(context, { rows: [row], images });
+  screen.hydrateHomeLazyImages(null, { forceFullScan: true, refreshIndex: true });
+
+  const firstWriteIdx = events.findIndex((entry) => entry.startsWith("write:"));
+  const lastReadIdx = events.reduce(
+    (last, entry, idx) => (entry.startsWith("read:") ? idx : last),
+    -1
+  );
+  assert.ok(firstWriteIdx > 0, "hydration must read geometry before writing attributes");
+  assert.ok(
+    lastReadIdx < firstWriteIdx,
+    "all rect and fit reads must precede DOM attribute mutations"
+  );
 });

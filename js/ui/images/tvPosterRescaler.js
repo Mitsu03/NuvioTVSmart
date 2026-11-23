@@ -1,9 +1,9 @@
 import { getTvRuntimePerformanceProfile } from "../../platform/tvRuntimePerformance.js";
 import {
+  canUseModernTvArtworkBounding,
   getArtworkCacheLimit,
   getDeviceMemoryGb,
-  isLowMemoryDevice,
-  isModernTvProfile
+  isLowMemoryDevice
 } from "../../platform/tvPerformancePolicy.js";
 
 // Android decodes artwork at the size Compose is going to draw it: Coil is
@@ -20,8 +20,8 @@ import {
 //
 // Rescaling must never change what the card looks like, so it is confined to
 // the cases where that can be guaranteed: the two object-fit values the home
-// cards actually use, and JPEG sources, which cannot carry transparency or
-// animation. Everything else loads exactly as it does today.
+// cards actually use, JPEG sources, and still WebP whose header proves it is
+// not an animation. Everything else loads exactly as it does today.
 
 /** The object-fit values this module can reproduce exactly. */
 export function isRescalableArtworkFit(fit) {
@@ -54,11 +54,11 @@ export function computeSourceRect(nw, nh, bw, bh, fit) {
 }
 
 /**
- * JPEG is the only format that is safe to re-encode blind: it has no alpha
- * channel to flatten and no frames to drop. GIF, APNG and animated WebP would
- * lose their animation to createImageBitmap, which keeps only the first frame,
- * and PNG or WebP may carry transparency that a JPEG would paint black.
- * Android keeps animated decoding, so those sources load untouched here too.
+ * JPEG has no alpha channel to flatten and no frames to drop, so it is always
+ * safe to re-encode. GIF, APNG and animated WebP would lose their animation to
+ * createImageBitmap, which keeps only the first frame, and PNG may carry
+ * transparency that a JPEG would paint black. Android keeps animated decoding,
+ * so those sources load untouched here too.
  *
  * Sniffing the bytes rather than trusting Content-Type keeps the check honest
  * when an addon CDN mislabels or omits the header.
@@ -71,6 +71,59 @@ export function isJpegHeader(bytes) {
     bytes[1] === 0xd8 &&
     bytes[2] === 0xff
   );
+}
+
+/**
+ * Still WebP header facts, before any decode. Android's Coil bounds WebP like
+ * every other artwork, so a 1536x864 collection cover in a 411x233 card costs
+ * 411x233 of bitmap there; the browser decodes the whole file unless this path
+ * steps in. Only the first RIFF chunk is read: VP8X, VP8L and VP8 are the three
+ * WebP starts, and a file that does not begin with one is left untouched.
+ *
+ * An animated file is reported rather than decoded: createImageBitmap keeps
+ * one frame, and Android keeps the animation. `alpha` picks a transparent
+ * output instead of an opaque JPEG that would paint the holes black.
+ */
+export function webpArtworkInfo(bytes) {
+  if (!bytes || bytes.length < 20) return null;
+  if (bytes[0] !== 0x52 || bytes[1] !== 0x49 || bytes[2] !== 0x46 || bytes[3] !== 0x46) return null;
+  if (bytes[8] !== 0x57 || bytes[9] !== 0x45 || bytes[10] !== 0x42 || bytes[11] !== 0x50)
+    return null;
+  const chunk = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+  if (chunk === "VP8X") {
+    // Extended format: flags, three reserved bytes, then the 24-bit canvas size.
+    if (bytes.length < 30) return null;
+    if (bytes[20] & 0x02) return { animated: true };
+    return {
+      animated: false,
+      alpha: Boolean(bytes[20] & 0x10),
+      width: 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16)),
+      height: 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16))
+    };
+  }
+  if (chunk === "VP8L") {
+    // 0x2f signature, then two 14-bit sizes and the alpha hint.
+    if (bytes.length < 25 || bytes[20] !== 0x2f) return null;
+    const bits = bytes[21] | (bytes[22] << 8) | (bytes[23] << 16) | (bytes[24] << 24);
+    return {
+      animated: false,
+      alpha: Boolean((bits >>> 28) & 1),
+      width: 1 + (bits & 0x3fff),
+      height: 1 + ((bits >>> 14) & 0x3fff)
+    };
+  }
+  if (chunk === "VP8 ") {
+    // Lossy key frame: three-byte frame tag, start code, then two 14-bit sizes.
+    if (bytes.length < 30) return null;
+    if (bytes[23] !== 0x9d || bytes[24] !== 0x01 || bytes[25] !== 0x2a) return null;
+    return {
+      animated: false,
+      alpha: false,
+      width: (bytes[26] | (bytes[27] << 8)) & 0x3fff,
+      height: (bytes[28] | (bytes[29] << 8)) & 0x3fff
+    };
+  }
+  return null;
 }
 
 // The native client bounds a compressed artwork body to 8 MiB; a huge addon
@@ -112,6 +165,48 @@ export function jpegDimensions(bytes) {
 }
 
 /**
+ * Natural size of a still PNG from its IHDR chunk, or null for APNG (which
+ * carries acTL before IDAT so createImageBitmap would keep only one frame).
+ */
+export function pngStillDimensions(bytes) {
+  if (
+    !bytes ||
+    bytes.length < 24 ||
+    bytes[0] !== 0x89 ||
+    bytes[1] !== 0x50 ||
+    bytes[2] !== 0x4e ||
+    bytes[3] !== 0x47
+  ) {
+    return null;
+  }
+  let offset = 8;
+  while (offset + 8 <= bytes.length) {
+    const length =
+      ((bytes[offset] << 24) |
+        (bytes[offset + 1] << 16) |
+        (bytes[offset + 2] << 8) |
+        bytes[offset + 3]) >>>
+      0;
+    const type = String.fromCharCode(
+      bytes[offset + 4] || 0,
+      bytes[offset + 5] || 0,
+      bytes[offset + 6] || 0,
+      bytes[offset + 7] || 0
+    );
+    if (type === "acTL") {
+      return null;
+    }
+    if (type === "IDAT" || type === "IEND") {
+      break;
+    }
+    offset += 12 + length;
+  }
+  const width = ((bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]) >>> 0;
+  const height = ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0;
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+/**
  * The one dimension to clamp for createImageBitmap, or null when the source is
  * already small enough. Supplying only one side keeps the source aspect ratio,
  * which the crop below depends on.
@@ -126,18 +221,27 @@ export function artworkResizeTarget(width, height, maxDimension = 1280) {
   return null;
 }
 
-const WORKER_SOURCE = `
+/** Exported so the streaming early-abort can be exercised without a browser. */
+export const WORKER_SOURCE = `
 const sourceRect = ${computeSourceRect.toString()};
 const isJpeg = ${isJpegHeader.toString()};
+const webpInfo = ${webpArtworkInfo.toString()};
 const isTooLarge = ${isArtworkTooLarge.toString()};
 const jpegSize = ${jpegDimensions.toString()};
+const pngSize = ${pngStillDimensions.toString()};
 const resizeTarget = ${artworkResizeTarget.toString()};
 
 self.onmessage = async (event) => {
-  const { id, url, width, height, fit } = event.data || {};
+  const { id, url, width, height, fit, kind, timeoutMs } = event.data || {};
   let full = null;
+  const hasTimeout = Number(timeoutMs) > 0 && typeof AbortController === "function";
+  const controller = hasTimeout ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), Number(timeoutMs)) : 0;
   try {
-    const response = await fetch(url, { credentials: "omit" });
+    const fetchOptions = controller
+      ? { mode: "cors", credentials: "omit", signal: controller.signal }
+      : { credentials: "omit" };
+    const response = await fetch(url, fetchOptions);
     if (!response.ok) {
       throw new Error("http " + response.status);
     }
@@ -148,29 +252,138 @@ self.onmessage = async (event) => {
     // Read the bytes off the response rather than the blob: Blob.arrayBuffer
     // is newer than OffscreenCanvas, so some webOS builds have the canvas but
     // not the blob method.
-    const bytes = await response.arrayBuffer();
-    if (isTooLarge(bytes)) {
-      throw new Error("too large");
+    if (kind === "logo") {
+      const bytes = await response.arrayBuffer();
+      if (isTooLarge(bytes)) {
+        throw new Error("too large");
+      }
+      const view = new Uint8Array(bytes);
+      const png = pngSize(view);
+      const webp = png ? null : webpInfo(view);
+      if (webp && webp.animated) {
+        throw new Error("animated webp");
+      }
+      const dimensions =
+        png || (webp && webp.width > 0 && webp.height > 0 ? webp : null) || jpegSize(view);
+      if (!dimensions) {
+        throw new Error("unsupported logo");
+      }
+      if (dimensions.width <= width && dimensions.height <= height) {
+        throw new Error("logo already small");
+      }
+      full = await createImageBitmap(new Blob([bytes]), {
+        resizeWidth: Math.min(width, dimensions.width),
+        resizeQuality: "medium",
+        imageOrientation: "from-image"
+      });
+      // Enforce both width and height bounds while keeping transparent edges.
+      const scale = Math.min(width / full.width, height / full.height, 1);
+      const targetW = Math.max(1, Math.round(full.width * scale));
+      const targetH = Math.max(1, Math.round(full.height * scale));
+      const canvas = new OffscreenCanvas(targetW, targetH);
+      canvas.getContext("2d", { alpha: true }).drawImage(full, 0, 0, targetW, targetH);
+      const out = await canvas.convertToBlob({ type: "image/webp", quality: 0.92 });
+      full.close();
+      full = null;
+      self.postMessage({ id, ok: true, blob: out });
+      return;
     }
-    const view = new Uint8Array(bytes);
-    if (!isJpeg(view)) {
+    const concatChunks = (chunks, total) => {
+      if (chunks.length === 1) {
+        return chunks[0];
+      }
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (let i = 0; i < chunks.length; i += 1) {
+        out.set(chunks[i], offset);
+        offset += chunks[i].byteLength;
+      }
+      return out;
+    };
+    const readPosterBytes = async () => {
+      if (!response.body || typeof response.body.getReader !== "function") {
+        const bytes = await response.arrayBuffer();
+        if (isTooLarge(bytes)) {
+          throw new Error("too large");
+        }
+        return new Uint8Array(bytes);
+      }
+      // Abort multi-MB animated WebPs as soon as the 30-byte header arrives so
+      // workers do not buffer the whole animation only to reject it.
+      const reader = response.body.getReader();
+      const chunks = [];
+      let total = 0;
+      let sniffed = false;
+      const cancelAndThrow = async (message) => {
+        try {
+          await reader.cancel();
+        } catch (_) {}
+        throw new Error(message);
+      };
+      const checkLeadingHeader = async () => {
+        if (sniffed) {
+          return;
+        }
+        sniffed = true;
+        const head = concatChunks(chunks, total);
+        const jpeg = isJpeg(head);
+        const webp = jpeg ? null : webpInfo(head);
+        if (!jpeg && !webp) {
+          await cancelAndThrow("not jpeg");
+        }
+        if (webp && webp.animated) {
+          await cancelAndThrow("animated webp");
+        }
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (value && value.byteLength) {
+          total += value.byteLength;
+          if (total > 8388608) {
+            await cancelAndThrow("too large");
+          }
+          chunks.push(value);
+          if (!sniffed && total >= 30) {
+            await checkLeadingHeader();
+          }
+        }
+      }
+      await checkLeadingHeader();
+      return concatChunks(chunks, total);
+    };
+    const view = await readPosterBytes();
+    const jpeg = isJpeg(view);
+    const webp = jpeg ? null : webpInfo(view);
+    if (!jpeg && !webp) {
       // Could carry transparency or animation. Leave it to the <img> tag.
       throw new Error("not jpeg");
     }
-    const dimensions = jpegSize(view);
+    if (webp && webp.animated) {
+      // One frame would survive the canvas; the <img> tag plays the animation.
+      throw new Error("animated webp");
+    }
+    const dimensions = jpeg ? jpegSize(view) : webp;
     const resize = dimensions ? resizeTarget(dimensions.width, dimensions.height, 1280) : null;
     full = await createImageBitmap(
-      new Blob([bytes]),
+      new Blob([view]),
       resize ? { ...resize, resizeQuality: "low" } : undefined
     );
     if (full.width <= width && full.height <= height) {
       // Already no larger than the card. Re-encoding would only lose quality.
       throw new Error("already small");
     }
+    const alpha = Boolean(webp && webp.alpha);
     const crop = sourceRect(full.width, full.height, width, height, fit);
     const canvas = new OffscreenCanvas(width, height);
-    canvas.getContext("2d", { alpha: false }).drawImage(full, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
-    const out = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+    canvas.getContext("2d", { alpha }).drawImage(full, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
+    const out = await canvas.convertToBlob(
+      alpha
+        ? { type: "image/webp", quality: 0.85 }
+        : { type: "image/jpeg", quality: 0.82 }
+    );
     full.close();
     full = null;
     self.postMessage({ id, ok: true, blob: out });
@@ -179,6 +392,10 @@ self.onmessage = async (event) => {
       full.close();
     }
     self.postMessage({ id, ok: false, reason: String((error && error.message) || error) });
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 };
 `;
@@ -242,12 +459,10 @@ export function getHomeArtworkObjectFit(image) {
 }
 
 export function shouldRescaleHomeArtwork() {
-  // Constrained generations already bound Home artwork with the smaller cache
-  // and the aggressive release window. On them the worker round-trip (fetch,
-  // decode, re-encode, second decode in the renderer) costs more than the RAM
-  // it saves, and the poster only appears once the worker answers: a 2021 Tizen
-  // set loaded artwork instantly before this path existed.
-  return isSupported() && isModernTvProfile(getTvRuntimePerformanceProfile());
+  // Modern >= 2 GB TVs keep bounded artwork rescaling even when measured slow,
+  // avoiding a fallback to full-resolution decoded textures; low-RAM and legacy
+  // sets keep direct <img> loading with the smaller cache and release window.
+  return isSupported() && canUseModernTvArtworkBounding(getTvRuntimePerformanceProfile());
 }
 
 // A worker that hangs would hold its slot forever and every later poster
@@ -266,8 +481,12 @@ function createPool() {
     nextId: 1,
     cache: new Map(),
     failed: new Map(),
+    failedUrls: new Set(),
     inflight: new Map(),
-    disposed: false
+    logoInflight: new Map(),
+    disposed: false,
+    suspended: false,
+    suspendRequested: false
   };
   const count = workerCount();
   for (let index = 0; index < count; index += 1) {
@@ -343,6 +562,9 @@ function retireWorker(state, worker, reason) {
 }
 
 function pump(state) {
+  if (state.suspended && state.queue.length) {
+    resumeWorkers(state);
+  }
   while (!state.disposed && state.idle.length && state.queue.length) {
     // Highest priority first, newest first within a priority: after a long
     // scroll the latest requests are the cards on screen, while the rows passed
@@ -364,24 +586,95 @@ function pump(state) {
     job.worker = worker;
     job.timer = setTimeout(() => retireWorker(state, worker, "timeout"), JOB_TIMEOUT_MS);
     state.jobs.set(job.id, job);
-    worker.postMessage({
+    const message = {
       id: job.id,
       url: job.url,
       width: job.width,
       height: job.height,
       fit: job.fit
-    });
+    };
+    if (job.kind === "logo") {
+      message.kind = "logo";
+      if (job.timeoutMs > 0) {
+        message.timeoutMs = job.timeoutMs;
+      }
+    }
+    worker.postMessage(message);
+  }
+  if (state.suspendRequested && !state.queue.length && !state.jobs.size) {
+    suspendWorkers(state);
+  }
+}
+
+/**
+ * Stop every pool thread until the next rescale needs one. The viewer is in
+ * playback: the TV is about to allocate its video buffer and idle JS isolates
+ * only compete for it.
+ *
+ * Only the compressed blobs nothing paints are reclaimed here. The urls the
+ * retained Home DOM still shows have to survive, so a job still running is
+ * allowed to finish instead of being cut off mid-decode.
+ */
+function suspendWorkers(state) {
+  if (!state || state.disposed) {
+    return;
+  }
+  state.suspendRequested = false;
+  state.workers.splice(0).forEach((worker) => {
+    try {
+      worker.terminate();
+    } catch (_) {}
+  });
+  state.idle.length = 0;
+  state.suspended = true;
+  state.cache.forEach((entry, key) => {
+    if (entry.uses > 0) {
+      return;
+    }
+    URL.revokeObjectURL(entry.objectUrl);
+    state.cache.delete(key);
+  });
+}
+
+function suspendPool(state) {
+  if (!state || state.disposed) {
+    return;
+  }
+  if (state.queue.length || state.jobs.size) {
+    // A poster is being re-encoded right now. Cut it only once the answer is
+    // in, or the card would keep the oversized original instead.
+    state.suspendRequested = true;
+    return;
+  }
+  suspendWorkers(state);
+}
+
+function resumeWorkers(state) {
+  const count = workerCount();
+  while (state.workers.length < count) {
+    if (!spawnWorker(state)) {
+      break;
+    }
+  }
+  state.suspended = state.workers.length === 0;
+  if (!state.workers.length) {
+    // Nothing can run, so hand the queue back and let every caller fall back
+    // to loading the original url, exactly as an unusable pool does.
+    state.queue.splice(0).forEach((job) => job.settle(null, "no workers"));
   }
 }
 
 // Artwork 404s are deliberately left out: the native client excludes art from
 // its negative cache because a CDN 404 can be transient. Only answers that
 // depend on the bytes themselves are permanent for the session.
-const DETERMINISTIC_ARTWORK_FAILURE = /^(not jpeg|already small|too large)$/;
+const DETERMINISTIC_ARTWORK_FAILURE =
+  /^(not jpeg|already small|too large|animated webp|unsupported logo|logo already small)$/;
+const URL_LEVEL_FAILURE = /^(not jpeg|too large|animated webp)$/;
 const ARTWORK_FAILURE_LIMIT = 512;
 
-function rememberArtworkFailure(state, key, reason) {
-  if (!DETERMINISTIC_ARTWORK_FAILURE.test(String(reason || ""))) {
+function rememberArtworkFailure(state, key, reason, url = "") {
+  const message = String(reason || "");
+  if (!DETERMINISTIC_ARTWORK_FAILURE.test(message)) {
     return;
   }
   if (state.failed.size >= ARTWORK_FAILURE_LIMIT) {
@@ -389,6 +682,13 @@ function rememberArtworkFailure(state, key, reason) {
     if (oldest !== undefined) state.failed.delete(oldest);
   }
   state.failed.set(key, true);
+  if (url && state.failedUrls && URL_LEVEL_FAILURE.test(message)) {
+    if (state.failedUrls.size >= ARTWORK_FAILURE_LIMIT) {
+      const oldestUrl = state.failedUrls.values().next().value;
+      if (oldestUrl !== undefined) state.failedUrls.delete(oldestUrl);
+    }
+    state.failedUrls.add(String(url));
+  }
 }
 
 function trimCache(state) {
@@ -446,10 +746,10 @@ function rescaleWithPool(state, url, { width, height, fit, priority = 2, isStale
   // The fit belongs in the key: the same artwork in the same box is cropped
   // for one card type and stretched for another.
   const key = `${url}|${width}x${height}|${fit}`;
-  // These answers cannot change for the same url and target: a non-JPEG source
-  // stays non-JPEG and a source already smaller than the box stays smaller.
-  // Retrying them on every scroll only spends a worker fetch to learn it again.
-  if (state.failed.has(key)) {
+  // These answers cannot change for the same url and target: an unsupported or
+  // animated source stays that way, and a source already smaller than the box
+  // stays smaller. Retrying them on every scroll only spends a worker fetch.
+  if (state.failed.has(key) || state.failedUrls?.has(url)) {
     return Promise.resolve(null);
   }
   const cached = state.cache.get(key);
@@ -495,7 +795,7 @@ function rescaleWithPool(state, url, { width, height, fit, priority = 2, isStale
       state.inflight.delete(key);
       if (!blob || state.disposed) {
         if (!blob && !state.disposed) {
-          rememberArtworkFailure(state, key, reason);
+          rememberArtworkFailure(state, key, reason, url);
         }
         resolve(null);
         return;
@@ -513,12 +813,28 @@ function rescaleWithPool(state, url, { width, height, fit, priority = 2, isStale
   return job.promise;
 }
 
+// The worker only rescales JPEG and still WebP, so a source that is plainly
+// something else would cost a full fetch and a worker slot just to learn "not
+// jpeg" while the card waits. The extension check ignores the query and
+// fragment. WebP is not on this list: its header decides still vs animated.
+const NON_RESCALABLE_PATH_RE = /\.(?:gifv?|png|svg|avif)$/i;
+const DATA_URL_RE = /^data:/i;
+const JPEG_DATA_URL_RE = /^data:image\/jpe?g[;,]/i;
+
+function isObviousNonRescalableUrl(url) {
+  const value = String(url);
+  if (DATA_URL_RE.test(value)) return !JPEG_DATA_URL_RE.test(value);
+  return NON_RESCALABLE_PATH_RE.test(value.split(/[?#]/, 1)[0]);
+}
+
 /**
  * Resolve a card-sized object url for `url`, or null when the original should
  * be used as-is. Never rejects: every failure path falls back to the original.
  */
-function shouldQueueRescale(url, { width, height, fit } = {}) {
-  return Boolean(url && width > 0 && height > 0 && isRescalableArtworkFit(fit));
+export function shouldQueueRescale(url, { width, height, fit } = {}) {
+  return Boolean(
+    url && width > 0 && height > 0 && isRescalableArtworkFit(fit) && !isObviousNonRescalableUrl(url)
+  );
 }
 
 export function rescaleHomeArtwork(url, options) {
@@ -526,6 +842,74 @@ export function rescaleHomeArtwork(url, options) {
   // worker just to discover it cannot be drawn.
   if (!shouldQueueRescale(url, options)) return Promise.resolve(null);
   return rescaleWithPool(getPool(), url, options);
+}
+
+/**
+ * Downscale a hero logo off the main thread using the existing Home rescaler
+ * pool. Returns a transparent WebP Blob, or null to fall back to the original.
+ */
+export function rescaleHomeLogoBlob(url, { width, height, timeoutMs = 1500 } = {}) {
+  const normalized = String(url || "").trim();
+  if (
+    typeof globalThis.Worker !== "function" ||
+    !normalized ||
+    !(width > 0) ||
+    !(height > 0) ||
+    !/^https?:\/\//i.test(normalized) ||
+    /\.(?:svg|gif)(?:[?#]|$)/i.test(normalized)
+  ) {
+    return Promise.resolve(null);
+  }
+  const state = getPool();
+  if (!state) {
+    return Promise.resolve(null);
+  }
+  const key = `logo|${normalized}|${width}x${height}`;
+  if (state.failed.has(key)) {
+    return Promise.resolve(null);
+  }
+  const pendingJob = state.logoInflight.get(key);
+  if (pendingJob) {
+    return pendingJob.promise;
+  }
+  const job = {
+    id: state.nextId++,
+    url: normalized,
+    width,
+    height,
+    fit: "contain",
+    kind: "logo",
+    timeoutMs,
+    priority: 0,
+    isStale: null,
+    worker: null
+  };
+  job.promise = new Promise((resolve) => {
+    job.settle = (blob, reason) => {
+      if (job.done) {
+        return;
+      }
+      job.done = true;
+      state.logoInflight.delete(key);
+      if (!blob || state.disposed) {
+        if (!blob && !state.disposed) {
+          rememberArtworkFailure(state, key, reason);
+        }
+        resolve(null);
+        return;
+      }
+      resolve(blob);
+    };
+  });
+  state.logoInflight.set(key, job);
+  state.queue.push(job);
+  pump(state);
+  return job.promise;
+}
+
+/** Whether `url` already failed a Home worker check for URL-wide reasons. */
+export function isKnownUnrescalableHomeArtwork(url) {
+  return Boolean(url && pool && !pool.disposed && pool.failedUrls?.has(String(url)));
 }
 
 /** Same contract as rescaleHomeArtwork, with its own pool for non-Home screens. */
@@ -570,6 +954,7 @@ function resetPool(state) {
   });
   state.queue.splice(0).forEach((job) => job.settle(null, "reset"));
   state.inflight.forEach((job) => job.settle(null, "reset"));
+  state.logoInflight?.forEach((job) => job.settle(null, "reset"));
   state.workers.forEach((worker) => {
     try {
       worker.terminate();
@@ -580,10 +965,12 @@ function resetPool(state) {
   state.cache.clear();
   state.jobs.clear();
   state.inflight.clear();
+  state.logoInflight?.clear();
   state.workers.length = 0;
   state.idle.length = 0;
   state.queue.length = 0;
   state.failed?.clear?.();
+  state.failedUrls?.clear?.();
 }
 
 /**
@@ -602,6 +989,21 @@ export function resetHomeArtworkRescaler() {
   const state = pool;
   pool = null;
   resetPool(state);
+}
+
+/**
+ * Stop the Home pool's threads for the duration of playback. Android enters the
+ * player with nothing but its decoder alive; here the retained Home DOM keeps
+ * the rescaler workers parked next to the video buffer. Painted urls survive,
+ * and the next rescale spawns a worker again on its own.
+ */
+export function suspendIdleHomeArtworkWorkers() {
+  suspendPool(pool);
+}
+
+/** Same as suspendIdleHomeArtworkWorkers for the non-Home pool. */
+export function suspendIdleArtworkWorkers() {
+  suspendPool(genericPool);
 }
 
 /** Drop the non-Home pool and its cached urls. */

@@ -225,6 +225,7 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <title>${appName}</title>
+  <script src="assets/runtime/webos-timezone-shim.js"></script>
   <script src="assets/runtime/legacy-features.js"></script>
   <link rel="stylesheet" href="css/${bundledCssFile}" />
 </head>
@@ -233,7 +234,6 @@ function buildWebOsIndexHtml({ webOsScriptPath = "" } = {}) {
   <script src="core-js.bundle.js" onerror="window.NuvioBootGuard &amp;&amp; window.NuvioBootGuard.scriptFailed(this.src)"></script>
   <script>window.__NUVIO_PLATFORM__ = "webos";</script>
   <script src="nuvio.env.js"></script>
-  <script src="assets/libs/qrcode-generator.js"></script>
 ${webOsScriptTag}  <script>
     window.NuvioBootGuard.runCompatibilityGate(${compatibilityOptions}, function startNuvioApp() {
       window.NuvioBootGuard.loadScript("app.bundle.js");
@@ -325,7 +325,7 @@ function buildTizenMainJs({ engineFsServiceId = "", pluginServiceId = "" } = {})
 
   function startNuvioApp() {
     loadScript("nuvio.env.js");
-    loadScript("assets/libs/qrcode-generator.js");
+    // assets/libs/qrcode-generator.js is loaded on demand by the QR screens.
     loadScript("app.bundle.js");
   }
 
